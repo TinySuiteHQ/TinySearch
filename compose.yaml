@@ -11,7 +11,7 @@ services:
     shm_size: "1gb"
     volumes:
       - tinysearch-models:/data/models
-      - ./configs/research_config.json:/config/research_config.json:ro
+      - ./configs:/config:ro
     environment:
       TINYSEARCH_MODELS_DIR: /data/models
       TINYSEARCH_CONFIG_PATH: /config/research_config.json
@@ -36,7 +36,7 @@ services:
     shm_size: "1gb"
     volumes:
       - tinysearch-models:/data/models
-      - ./configs/research_config.json:/config/research_config.json:ro
+      - ./configs:/config
     environment:
       TINYSEARCH_MODELS_DIR: /data/models
       TINYSEARCH_CONFIG_PATH: /config/research_config.json

@@ -18,7 +18,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && apt-get install -y --no-install-recommends ca-certificates curl gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -33,9 +33,10 @@ COPY . .
 
 RUN useradd --create-home --shell /usr/sbin/nologin tinysearch \
     && mkdir -p /data/models /app/trace_logs \
-    && chown -R tinysearch:tinysearch /data /app/trace_logs
+    && chown -R tinysearch:tinysearch /data /app/trace_logs \
+    && chmod +x /app/docker-entrypoint.sh
 
-USER tinysearch
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 FROM runtime-base AS fastapi
 

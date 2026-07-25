@@ -23,6 +23,7 @@ from services.research_config_service import (
     normalize_research_query,
     research_run_kwargs,
     research_tokenizer_name,
+    save_research_config,
 )
 from services.scrape_service import (
     DEFAULT_SCRAPE_MAX_TOKENS,
@@ -80,6 +81,22 @@ async def current_datetime_endpoint() -> dict[str, str]:
     return current_datetime_payload()
 
 
+@app.get("/config")
+async def get_config_endpoint() -> dict[str, Any]:
+    return load_research_config()
+
+
+@app.put("/config")
+async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return save_research_config(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_config", "message": str(exc)},
+        ) from exc
+
+
 def _scrape_response(result: ScrapeResult) -> dict[str, Any]:
     return {
         "answer": result.answer,
@@ -128,6 +145,7 @@ async def scrape_endpoint(request: ScrapeRequest) -> dict[str, Any]:
 @app.post("/research")
 async def research_endpoint(request: ResearchRequest) -> dict[str, Any]:
     config = load_research_config()
+    await _ensure_local_bundle_for_config(config)
     query = normalize_research_query(request.query)
     result = await agentic_run(
         query,

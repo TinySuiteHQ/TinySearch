@@ -195,10 +195,6 @@ source URL.
 """.strip()
 
 
-def _research_settings() -> dict[str, Any]:
-    return research_run_kwargs(load_research_config())
-
-
 def _answer_tokens(answer: str) -> int:
     return token_count(answer, encoding_name=research_tokenizer_name())
 
@@ -279,10 +275,12 @@ async def research(
     started = time.monotonic()
     _log(f"research called query={query!r}")
     try:
+        config = load_research_config()
+        _ensure_local_bundle_for_config(config)
         result = await agentic_run(
             query,
-            trace_path=config_trace_path(),
-            **_research_settings(),
+            trace_path=config_trace_path(config),
+            **research_run_kwargs(config),
         )
         elapsed = time.monotonic() - started
         _log(

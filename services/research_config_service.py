@@ -167,17 +167,36 @@ def _coerce_config(raw: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
-def load_research_config(path: str | Path | None = None) -> dict[str, Any]:
+def resolve_research_config_path(path: str | Path | None = None) -> Path:
     raw_path = path if path is not None else os.environ.get("TINYSEARCH_CONFIG_PATH")
     config_path = Path(raw_path) if raw_path else DEFAULT_RESEARCH_CONFIG_PATH
     if not config_path.is_absolute():
         config_path = PROJECT_ROOT / config_path
+    return config_path
+
+
+def load_research_config(path: str | Path | None = None) -> dict[str, Any]:
+    config_path = resolve_research_config_path(path)
     if not config_path.exists():
         return dict(DEFAULT_RESEARCH_CONFIG)
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError(f"research config must be a JSON object: {config_path}")
     return _coerce_config(raw)
+
+
+def save_research_config(
+    raw: dict[str, Any], path: str | Path | None = None
+) -> dict[str, Any]:
+    config_path = resolve_research_config_path(path)
+    merged = load_research_config(config_path) if config_path.exists() else dict(DEFAULT_RESEARCH_CONFIG)
+    merged.update(raw)
+    config = _coerce_config(merged)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = config_path.with_suffix(config_path.suffix + ".tmp")
+    tmp_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    tmp_path.replace(config_path)
+    return config
 
 
 def research_run_kwargs(config: dict[str, Any] | None = None) -> dict[str, Any]:
