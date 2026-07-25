@@ -56,7 +56,7 @@ DEFAULT_RESEARCH_CONFIG: dict[str, Any] = {
     "search_engines": [],
     "search_region": "",
     "search_backend_fallback": True,
-    "trace_path": "trace_logs/agentic_trace.json",
+    "trace_path": "",
 }
 
 _INT_FIELDS = {

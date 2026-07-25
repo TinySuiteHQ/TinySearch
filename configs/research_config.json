@@ -35,5 +35,5 @@
   "search_engines": [],
   "search_region": "",
   "search_backend_fallback": true,
-  "trace_path": "trace_logs/agentic_trace.json"
+  "trace_path": ""
 }
