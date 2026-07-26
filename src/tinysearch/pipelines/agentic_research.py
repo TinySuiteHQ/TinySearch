@@ -26,7 +26,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from services.embedding_service import (
+from tinysearch.services.embedding_service import (
     DEFAULT_EMBEDDING_BACKEND,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDING_OPENAI_ENV_FILE,
@@ -35,17 +35,17 @@ from services.embedding_service import (
     resolve_local_embedding_model_spec,
     resolve_embedding_tokenizer_name,
 )
-from services.chunk_pool_selection_service import select_chunks_with_quota_and_fill
-from services.grounded_prompt_service import format_search_grounded_prompt
-from services.hybrid_embed_search_service import EmbeddingFn, rank_chunks_hybrid
-from services.research_config_service import (
+from tinysearch.services.chunk_pool_selection_service import select_chunks_with_quota_and_fill
+from tinysearch.services.hybrid_embed_search_service import EmbeddingFn, rank_chunks_hybrid
+from tinysearch.results import public_chunk, result_envelope
+from tinysearch.services.research_config_service import (
     config_trace_path,
     load_research_config,
     research_run_kwargs,
 )
-from services.site_crawl_service import crawl
-from services.text_chunking_service import chunk_text, truncate_text_to_max_tokens
-from services.web_search_service import (
+from tinysearch.services.site_crawl_service import crawl
+from tinysearch.services.text_chunking_service import chunk_text, truncate_text_to_max_tokens
+from tinysearch.services.web_search_service import (
     SearchBackendError,
     SearchResult,
     filter_blocked_search_results,
@@ -64,7 +64,10 @@ DEFAULT_DENSE_DOCUMENT_PREFIX = "title: none | text: "
 
 @dataclass(frozen=True)
 class AgenticResult:
-    answer: str
+    payload: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.payload
 
 
 def _ensure_utf8_stdio() -> None:
@@ -286,7 +289,7 @@ async def agentic_run(
         "ranked_search_results": [],
         "crawl_results": [],
         "ranked_chunk_pool": [],
-        "final_prompt": "",
+        "final_result": None,
         "crawl_errors": [],
     }
 
@@ -294,13 +297,32 @@ async def agentic_run(
         if progress_callback is not None:
             await progress_callback(event, payload)
 
-    def finish(status: str, answer: str, crawl_errors: Sequence[str]) -> AgenticResult:
+    def finish(
+        status: str,
+        sources: list[dict[str, Any]],
+        crawl_errors: Sequence[str],
+        stats: dict[str, Any],
+        *,
+        error_code: str = "crawl_failed",
+    ) -> AgenticResult:
+        errors = [
+            {"code": error_code, "message": error}
+            for error in crawl_errors
+        ]
+        payload = result_envelope(
+            operation="research",
+            status=status,
+            query=query,
+            sources=sources,
+            errors=errors,
+            stats=stats,
+        )
         trace["status"] = status
         trace["finished_at"] = datetime.now(UTC).isoformat()
-        trace["final_prompt"] = answer
+        trace["final_result"] = payload
         trace["crawl_errors"] = list(crawl_errors)
         _write_trace(trace_path, trace)
-        return AgenticResult(answer=answer)
+        return AgenticResult(payload=payload)
 
     try:
         async with asyncio.timeout(pipeline_timeout_seconds):
@@ -313,8 +335,18 @@ async def agentic_run(
             except SearchBackendError as exc:
                 _agentic_log(f"search backend error: {exc}")
                 await emit("search_backend_error", error=str(exc))
-                prompt = format_search_grounded_prompt(question=query, results=[])
-                return finish("search_backend_error", prompt, [])
+                return finish(
+                    "search_backend_error",
+                    [],
+                    [str(exc)],
+                    {
+                        "search_results": 0,
+                        "sources_crawled": 0,
+                        "chunks_considered": 0,
+                        "chunks_selected": 0,
+                    },
+                    error_code="search_backend_error",
+                )
             results = [result for result in raw_results if _is_http_url(result.url)]
             results = filter_blocked_search_results(results, blocked_domains or [])
             _agentic_log(f"search done results={len(results)}")
@@ -322,8 +354,17 @@ async def agentic_run(
             await emit("search_results", results_count=len(results))
 
             if not results:
-                prompt = format_search_grounded_prompt(question=query, results=[])
-                return finish("no_search_results", prompt, [])
+                return finish(
+                    "no_results",
+                    [],
+                    [],
+                    {
+                        "search_results": 0,
+                        "sources_crawled": 0,
+                        "chunks_considered": 0,
+                        "chunks_selected": 0,
+                    },
+                )
 
             tokenizer_name = (
                 str(encoding_name).strip()
@@ -479,19 +520,67 @@ async def agentic_run(
                 chunks_in_prompt=len(ranked_chunk_pool),
                 crawl_errors_count=len(crawl_errors),
             )
-            prompt = format_search_grounded_prompt(question=query, results=crawled_results)
             await emit("done", results_count=len(crawled_results), crawl_errors_count=len(crawl_errors))
             _agentic_log(f"done results={len(crawled_results)} crawl_errors={len(crawl_errors)}")
-            return finish("ok", prompt, crawl_errors)
+            rank_by_chunk_id = {
+                str(chunk.get("chunk_id") or ""): rank
+                for rank, chunk in enumerate(ranked_chunk_pool, start=1)
+            }
+            public_sources = [
+                {
+                    "id": str(result.get("result_id") or ordinal),
+                    "title": str(result.get("title") or ""),
+                    "url": str(result.get("url") or ""),
+                    "snippet": str(result.get("snippet") or ""),
+                    "chunks": [
+                        public_chunk(
+                            chunk,
+                            rank=rank_by_chunk_id.get(
+                                str(chunk.get("chunk_id") or ""),
+                                chunk_ordinal,
+                            ),
+                        )
+                        for chunk_ordinal, chunk in enumerate(
+                            result.get("ranked_chunks") or [],
+                            start=1,
+                        )
+                    ],
+                }
+                for ordinal, result in enumerate(crawled_results, start=1)
+            ]
+            return finish(
+                "partial" if crawl_errors else "ok",
+                public_sources,
+                crawl_errors,
+                {
+                    "search_results": len(results),
+                    "sources_crawled": sum(
+                        1 for result in crawled_results if not result.get("crawl_error")
+                    ),
+                    "chunks_considered": len(chunk_pool),
+                    "chunks_selected": len(ranked_chunk_pool),
+                },
+            )
     except TimeoutError:
         _agentic_log(f"timeout query={query!r} limit_s={pipeline_timeout_seconds}")
-        prompt = format_search_grounded_prompt(question=query, results=[])
-        return finish("timeout", prompt, [])
+        return finish(
+            "timeout",
+            [],
+            [],
+            {
+                "search_results": 0,
+                "sources_crawled": 0,
+                "chunks_considered": 0,
+                "chunks_selected": 0,
+            },
+        )
 
 
 async def agentic_answer(query: str, **kwargs: Any) -> str:
+    from tinysearch.prompts import to_prompt
+
     result = await agentic_run(query, **kwargs)
-    return result.answer
+    return to_prompt(result.to_dict())
 
 
 if __name__ == "__main__":

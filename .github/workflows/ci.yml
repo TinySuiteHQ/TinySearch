@@ -10,8 +10,8 @@ permissions:
   contents: read
 
 jobs:
-  tests:
-    name: Unit tests
+  core-tests:
+    name: Core package
     runs-on: ubuntu-latest
 
     steps:
@@ -27,9 +27,42 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install .
 
-      - name: Run tests
+      - name: Verify core imports without declared server dependencies
+        run: |
+          python -c "import tinysearch; from tinysearch import TinySearchConfig, to_prompt"
+          python -c "import importlib.metadata as m; r=m.requires('tinysuite-tinysearch') or []; assert not any(x.lower().startswith(('fastapi','uvicorn','mcp')) and 'extra ==' not in x.lower() for x in r)"
+
+      - name: Run core contract tests
+        run: |
+          python -m unittest \
+            tests.test_core \
+            tests.test_public_config_and_results \
+            tests.test_agentic_research_pipeline \
+            tests.test_scrape_service \
+            tests.test_grounded_prompt_service
+
+  server-tests:
+    name: Server extra
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package with server extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[server]"
+
+      - name: Run full test suite
         run: python -m unittest discover tests
 
   docker-build:
@@ -47,7 +80,6 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          target: mcp
           push: false
           tags: tinysearch:test
           cache-from: type=gha

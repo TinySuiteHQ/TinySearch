@@ -11,3 +11,4 @@ onnxruntime>=1.17.0,<2
 tokenizers>=0.15.0,<1
 openai==2.36.0
 ddgs>=9.14.4,<10
+platformdirs>=4,<5

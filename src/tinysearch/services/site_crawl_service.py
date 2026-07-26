@@ -11,8 +11,8 @@ from docx import Document
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
-from services.text_chunking_service import chunk_text
-from services.token_counter_service import (
+from tinysearch.services.text_chunking_service import chunk_text
+from tinysearch.services.token_counter_service import (
     decode_tokens,
     encode_tokens,
     token_count,

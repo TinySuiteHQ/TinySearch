@@ -20,6 +20,7 @@ services:
       MCP_TRANSPORT: streamable-http
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
+      TINYSEARCH_SEARCH_BACKEND: searxng
       SEARXNG_URL: http://searxng:8080/search
     depends_on:
       - searxng

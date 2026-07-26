@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from services.scrape_service import (
+from tinysearch.services.scrape_service import (
     _extract_metadata,
     _extract_title,
     _scan_html_meta,

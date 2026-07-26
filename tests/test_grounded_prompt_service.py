@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from services.grounded_prompt_service import (
+from tinysearch.services.grounded_prompt_service import (
     FIELD_RULE,
     PROMPT_RULE,
     format_relevant_text,

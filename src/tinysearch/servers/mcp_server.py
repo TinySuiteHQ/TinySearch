@@ -1,39 +1,29 @@
 from __future__ import annotations
 
+import asyncio
 import faulthandler
 import os
 import sys
 import time
-from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 from starlette.datastructures import Headers
 from starlette.routing import BaseRoute, Mount, Route
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
-
-from pipelines.agentic_research import agentic_run
-from services.current_datetime_service import current_datetime_payload
-from services.embedding_service import normalize_embedding_backend
-from services.research_config_service import (
-    config_trace_path,
+from tinysearch import core
+from tinysearch.services.research_config_service import (
     load_research_config,
-    normalize_research_query,
-    research_run_kwargs,
     research_tokenizer_name,
 )
-from services.scrape_service import (
+from tinysearch.services.scrape_service import (
     DEFAULT_SCRAPE_MAX_TOKENS,
     SCRAPE_ERROR_MAP,
     ScrapeError,
-    scrape_url,
 )
-from services.token_counter_service import token_count
-from services.url_safety_service import BlockedUrlError, InvalidUrlError
+from tinysearch.services.token_counter_service import token_count
+from tinysearch.services.url_safety_service import BlockedUrlError, InvalidUrlError
 
 
 def _mcp_host() -> str:
@@ -199,14 +189,6 @@ def _answer_tokens(answer: str) -> int:
     return token_count(answer, encoding_name=research_tokenizer_name())
 
 
-def _ensure_local_bundle_for_config(config: dict[str, Any]) -> None:
-    if normalize_embedding_backend(str(config["embedding_backend"])) != "onnx":
-        return
-    from services.onnx_bundle_service import ensure_onnx_bundle_sync
-
-    ensure_onnx_bundle_sync(str(config["embedding_model"]))
-
-
 def _log(message: str) -> None:
     print(f"[tinysearch] {message}", file=sys.stderr, flush=True)
 
@@ -245,7 +227,7 @@ mcp = FastMCP(
 )
 async def get_current_datetime_tool() -> dict[str, str]:
     _log("get_current_datetime called")
-    return current_datetime_payload()
+    return core.get_current_datetime()
 
 
 @mcp.tool(
@@ -253,8 +235,8 @@ async def get_current_datetime_tool() -> dict[str, str]:
     title="Research",
     description=(
         "Discover relevant URLs for the user's question, crawl ranked pages, "
-        "and return a search-grounded answer prompt. Use this first when you "
-        "need to find sources. Input schema has exactly one field: query. "
+        "and return a search-grounded answer prompt or structured evidence. "
+        "Use this first when you need to find sources. "
         "Pass the user's question as-is. For time-sensitive or relative-date "
         "questions, call get_current_datetime() first unless you already "
         "know the current date and time."
@@ -270,25 +252,34 @@ async def research(
             )
         ),
     ],
+    output_format: Annotated[
+        Literal["prompt", "json"],
+        Field(
+            description=(
+                "Return an LLM-ready grounded prompt (default) or structured "
+                "schema-v1 evidence JSON."
+            )
+        ),
+    ] = "prompt",
 ) -> dict[str, Any]:
-    query = normalize_research_query(query)
     started = time.monotonic()
     _log(f"research called query={query!r}")
     try:
         config = load_research_config()
-        _ensure_local_bundle_for_config(config)
-        result = await agentic_run(
-            query,
-            trace_path=config_trace_path(config),
-            **research_run_kwargs(config),
-        )
+        result = await core.research(query, config=config)
         elapsed = time.monotonic() - started
+        if output_format == "json":
+            _log(f"research returning structured evidence elapsed={elapsed:.2f}s")
+            return result
+        from tinysearch.prompts import to_prompt
+
+        answer = to_prompt(result)
         _log(
             "research returning "
-            f"answer_tokens={_answer_tokens(result.answer)} "
+            f"answer_tokens={_answer_tokens(answer)} "
             f"elapsed={elapsed:.2f}s"
         )
-        return {"answer": result.answer}
+        return {"answer": answer}
     except Exception as exc:
         elapsed = time.monotonic() - started
         _log(f"research failed elapsed={elapsed:.2f}s error={exc!r}")
@@ -324,21 +315,26 @@ async def scrape_url_tool(
             )
         ),
     ],
+    output_format: Annotated[
+        Literal["prompt", "json"],
+        Field(
+            description=(
+                "Return an LLM-ready grounded prompt (default) or structured "
+                "schema-v1 evidence JSON."
+            )
+        ),
+    ] = "prompt",
 ) -> dict[str, Any]:
     started = time.monotonic()
     max_tokens = DEFAULT_SCRAPE_MAX_TOKENS
     _log(f"scrape_url called url={url!r} query={query!r} max_tokens={max_tokens}")
-    cfg = load_research_config()
-    _ensure_local_bundle_for_config(cfg)
-    tokenizer = research_tokenizer_name(cfg)
     try:
-        result = await scrape_url(
+        config = load_research_config()
+        result = await core.scrape_url(
             url,
             query,
             max_tokens=max_tokens,
-            include_metadata=True,
-            config=cfg,
-            tokenizer_name=tokenizer,
+            config=config,
         )
     except (InvalidUrlError, BlockedUrlError, ScrapeError) as exc:
         elapsed = time.monotonic() - started
@@ -346,26 +342,34 @@ async def scrape_url_tool(
         _log(f"scrape_url failed elapsed={elapsed:.2f}s code={code} error={exc!r}")
         raise ValueError(f"{code}: {exc}") from exc
     elapsed = time.monotonic() - started
+    if output_format == "json":
+        _log(f"scrape_url returning structured evidence elapsed={elapsed:.2f}s")
+        return result
+    from tinysearch.prompts import to_prompt
+
+    answer = to_prompt(result)
+    source = result["sources"][0]
     _log(
-        f"scrape_url returning content_tokens={result.content_tokens} "
-        f"answer_tokens={result.answer_tokens} truncated={result.truncated} "
+        f"scrape_url returning content_tokens={result['stats']['content_tokens']} "
+        f"answer_tokens={_answer_tokens(answer)} "
+        f"truncated={result['stats']['truncated']} "
         f"elapsed={elapsed:.2f}s"
     )
     return {
-        "answer": result.answer,
-        "url": result.url,
-        "title": result.title,
-        "content_tokens": result.content_tokens,
-        "answer_tokens": result.answer_tokens,
-        "truncated": result.truncated,
-        "retrieved_at": result.retrieved_at,
+        "answer": answer,
+        "url": source["url"],
+        "title": source["title"],
+        "content_tokens": result["stats"]["content_tokens"],
+        "answer_tokens": _answer_tokens(answer),
+        "truncated": result["stats"]["truncated"],
+        "retrieved_at": result["retrieved_at"],
     }
 
 
-if __name__ == "__main__":
+def main() -> None:
     _enable_traceback_dump()
     cfg = load_research_config()
-    _ensure_local_bundle_for_config(cfg)
+    asyncio.run(core._ensure_local_bundle_for_config(cfg))
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError(
@@ -378,3 +382,7 @@ if __name__ == "__main__":
         anyio.run(_run_streamable_http_combined_async)
     else:
         mcp.run(transport=transport)
+
+
+if __name__ == "__main__":
+    main()

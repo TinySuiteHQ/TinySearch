@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from services.hybrid_embed_search_service import rank_chunks_hybrid
+from tinysearch.services.hybrid_embed_search_service import rank_chunks_hybrid
 
 
 async def _fake_embedder(inputs: list[str]) -> list[list[float]]:

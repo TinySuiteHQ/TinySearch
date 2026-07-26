@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from services.token_counter_service import (
+from tinysearch.services.token_counter_service import (
     _looks_like_tokenizer_path,
     _resolve_tokenizers_json,
     resolve_tokenizer,
@@ -23,7 +23,7 @@ class TokenizerPathGuardTests(unittest.TestCase):
         self.assertTrue(_looks_like_tokenizer_path("models/tokenizer.json"))
 
     def test_non_path_name_does_not_probe_filesystem(self) -> None:
-        with patch("services.token_counter_service.Path") as path_cls:
+        with patch("tinysearch.services.token_counter_service.Path") as path_cls:
             self.assertIsNone(_resolve_tokenizers_json("o200k_base"))
         path_cls.assert_not_called()
 

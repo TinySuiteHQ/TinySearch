@@ -18,8 +18,8 @@
 **Self-hosted web research for MCP agents.**
 
 TinySearch gives local AI agents a web-research tool they can actually use:
-search the web, rerank results, crawl the best pages, extract the most relevant
-chunks, and return a source-grounded prompt your LLM can answer from.
+search the web, rerank results, crawl the best pages, and return structured,
+source-grounded evidence that can optionally be rendered as an LLM prompt.
 
 <p align="center">
   <img src="assets/tinysearch-readme.gif" alt="TinySearch terminal demo showing a source-grounded research prompt" width="780" />
@@ -27,11 +27,12 @@ chunks, and return a source-grounded prompt your LLM can answer from.
 
 No hosted dashboard. No account system. No analytics. No scraped-data cache.
 
-Just search -> crawl -> rerank -> grounded prompt.
+Just search -> crawl -> rerank -> structured evidence.
 
 ## Contents
 
 - [Why people use it](#why-people-use-it)
+- [Python library](#python-library)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
 - [Run from source](#run-from-source)
@@ -60,6 +61,55 @@ Just search -> crawl -> rerank -> grounded prompt.
 TinySearch is built for local agents, prototypes, personal workflows, and small
 systems where source-grounded web research matters more than running a full
 search product.
+
+## Python library
+
+Install the core package without server dependencies:
+
+```bash
+pip install tinysuite-tinysearch
+```
+
+Retrieval returns a stable, JSON-serializable evidence result:
+
+```python
+import asyncio
+from tinysearch import TinySearchConfig, research, to_prompt
+
+async def main():
+    result = await research(
+        "How does asyncio cancellation work?",
+        config=TinySearchConfig(search_top_k=10),
+    )
+    print(result["sources"])
+
+    # Render the same evidence for an LLM only when needed.
+    print(to_prompt(result))
+
+asyncio.run(main())
+```
+
+Library calls use canonical DDGS defaults and do not implicitly read
+environment variables, the current directory, or a repository config file.
+Pass a `TinySearchConfig`, partial dictionary, or explicitly loaded JSON config
+when you want overrides.
+
+Migration from the prompt-first Python API:
+
+```python
+# Before
+prompt = (await research(query))["answer"]
+
+# After
+result = await research(query)
+prompt = to_prompt(result)
+```
+
+Install the optional MCP and HTTP transports with:
+
+```bash
+pip install "tinysuite-tinysearch[server]"
+```
 
 ## Quick start
 
@@ -104,8 +154,8 @@ Typical routing:
   `research` found the page to inspect.
 - Use `get_current_datetime()` before time-sensitive research.
 
-The tools return a grounded prompt in the `answer` field. Your MCP client model
-uses that prompt to write the final response with citations.
+The tools return a grounded prompt in the `answer` field by default. Pass
+`output_format: "json"` to receive the schema-v1 structured evidence instead.
 
 ## How it works
 
@@ -118,20 +168,20 @@ flowchart TB
         C --> D[Rank search docs<br/>dense + BM25 weighted RRF]
     end
 
-    subgraph Row2["Crawl and build prompt"]
+    subgraph Row2["Crawl and return evidence"]
         direction LR
         E[Crawl kept URLs in parallel<br/>crawl4ai markdown] --> F[Truncate and chunk markdown]
         F --> G[Rank combined chunk pool<br/>dense + BM25 weighted RRF]
         G --> H[Dedupe chunks<br/>apply source quotas and fill]
-        H --> I[Build source-grounded prompt]
+        H --> I[Return structured evidence<br/>optionally render a prompt]
     end
 
     Row1 --> Row2
 ```
 
-TinySearch does not directly answer the question. It returns a
-**structured prompt** in the MCP tool's **`answer` field**, and your
-**client model** uses that prompt to produce the final **cited response**.
+TinySearch does not directly answer the question. The core returns structured
+evidence; MCP renders that evidence into the **`answer` field** by default, and
+your **client model** produces the final **cited response**.
 
 <p align="center">
   <img src="assets/demo_terminal_prompt.gif" alt="TinySearch terminal demo showing a source-grounded research prompt" width="780" />
@@ -148,7 +198,7 @@ cd TinySearch
 
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[server]"
 ```
 
 MCP clients spawn TinySearch from their config. Add it with absolute paths:
@@ -275,21 +325,21 @@ volume keeps downloaded model bundles between launches.
 
 Useful when you want HTTP instead of MCP:
 
+Install `tinysuite-tinysearch[server]`, then run:
+
 ```bash
-uvicorn servers.fastapi_server:app --reload
+uvicorn tinysearch.servers.fastapi_server:app --reload
 ```
 
 Endpoints mirror the MCP tools:
 
 - `GET /health`
-- `GET /current_datetime` — same as `get_current_datetime()`
-- `POST /research` — body `{"query": "..."}`; same as `research(query)`
-- `POST /scrape` — body `{"url": "...", "query": "..."}`; same as
-  `scrape_url(url, query)`
+- `GET /current_datetime`
+- `POST /research` — `{"query": "...", "output_format": "prompt"}`
+- `POST /scrape` — `{"url": "...", "query": "...", "output_format": "prompt"}`
 
-`POST /scrape` returns the same fields as the MCP tool: `answer`,
-`content_tokens`, `answer_tokens`, `truncated`, `url`, `title`, and
-`retrieved_at` (aware UTC).
+`output_format` accepts `prompt` (the compatibility default) or `json`.
+JSON mode returns the same schema-v1 evidence as the Python API.
 
 Errors return `{"detail": {"code", "message"}}` with stable codes:
 `invalid_url` (400), `blocked_url` (403), `unsupported_document` (415),
@@ -315,9 +365,14 @@ policy.
 
 ## Configuration
 
-Tune research defaults in `configs/research_config.json`. Set
-`TINYSEARCH_CONFIG_PATH` to load a different JSON config file, which is the
-recommended Docker override pattern.
+The Python API owns one canonical default configuration and accepts explicit
+configuration objects or dictionaries. Server processes additionally support
+`TINYSEARCH_CONFIG_PATH`; `SEARXNG_URL` and `TINYSEARCH_SEARCH_BACKEND` are
+server/deployment overrides. Precedence is CLI/runtime overrides, environment,
+the explicit server config file, then core defaults.
+
+`configs/research_config.json` is the partial SearXNG Compose profile, not a
+package default.
 
 Set `blocked_domains` to a JSON list of domains you do not want TinySearch to
 return or crawl. Entries match the domain and its subdomains, so `example.com`
@@ -443,8 +498,8 @@ restart it.
 
 ### Compose setup
 
-The bundled `compose.yaml` starts a `searxng` service alongside `mcp` (and
-optionally `fastapi`). The `mcp` and `fastapi` services reach SearXNG at
+The bundled `compose.yaml` starts a `searxng` service alongside `tinysearch`
+(and optionally `fastapi`). Both TinySearch services reach SearXNG at
 `http://searxng:8080/search` over the internal compose network, and have
 `SEARXNG_URL` set automatically.
 
@@ -457,15 +512,11 @@ A minimal `searxng/settings.yml` is committed at the repo root. Override
 
 ### Single-container / from-source
 
-Running `python servers/mcp_server.py` from a checkout with no
-`configs/research_config.json` present uses the in-code default,
-`search_backend: "ddgs"` — no SearXNG involvement at all. The shipped
-`configs/research_config.json` (used by both Compose files) instead sets
-`search_backend: "searxng"` with `search_backend_fallback: true`; if you run
-that config standalone (e.g. `docker run marcellm01/tinysearch:latest`) with
-no local SearXNG, the call fails fast on the short connect timeout and
-TinySearch transparently falls back to `ddgs` in DuckDuckGo compatibility
-mode.
+The Python library and standalone image use the canonical
+`search_backend: "ddgs"` default with no SearXNG involvement. A checkout no
+longer changes defaults merely because `configs/research_config.json` exists.
+The bundled Compose setup explicitly loads that partial profile to select
+SearXNG and its tuned retrieval limits.
 
 To force DuckDuckGo-only behavior with no SearXNG involvement, set:
 
@@ -501,9 +552,11 @@ release updates, bug reports, and contributor discussion.
 
 ## Entrypoints
 
-- `pipelines.agentic_research.agentic_run`: single-turn search, crawl, ranking, and prompt assembly
-- `servers.mcp_server`: MCP server for agent clients
-- `servers.fastapi_server`: optional HTTP API
+- `tinysearch.research` and `tinysearch.scrape_url`: structured Python API
+- `tinysearch.to_prompt`: pure structured-evidence prompt renderer
+- `tinysearch mcp`: stdio MCP server (also the temporary no-argument default)
+- `tinysearch serve`: Streamable HTTP MCP server
+- `tinysearch.servers.fastapi_server:app`: optional FastAPI application
 
 ## Tests
 

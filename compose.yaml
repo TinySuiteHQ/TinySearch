@@ -1,8 +1,7 @@
 services:
-  mcp:
+  tinysearch:
     build:
       context: .
-      target: mcp
       args:
         TINYSEARCH_VERSION: local
     image: tinysearch:local
@@ -25,10 +24,18 @@ services:
   fastapi:
     build:
       context: .
-      target: fastapi
       args:
         TINYSEARCH_VERSION: local
-    image: tinysearch-fastapi:local
+    image: tinysearch:local
+    command:
+      [
+        "uvicorn",
+        "tinysearch.servers.fastapi_server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
     profiles:
       - fastapi
     ports:

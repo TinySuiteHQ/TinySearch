@@ -1,68 +1,71 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from servers.fastapi_server import (
+from tinysearch.core import _ensure_local_bundle_for_config
+from tinysearch.servers.fastapi_server import (
     ResearchRequest,
-    _ensure_local_bundle_for_config as ensure_fastapi_bundle,
     _tinysearch_version,
     research_endpoint,
 )
-from servers.mcp_server import _ensure_local_bundle_for_config as ensure_mcp_bundle
-from servers.mcp_server import _mcp_cors_origins
-from services.research_config_service import (
+from tinysearch.servers.mcp_server import _mcp_cors_origins, research as mcp_research
+from tinysearch.services.research_config_service import (
     DEFAULT_RESEARCH_CONFIG,
     config_trace_path,
     normalize_research_query,
     research_run_kwargs,
 )
+from tinysearch.results import result_envelope
 
 
-class ServerEmbeddingStartupTests(unittest.IsolatedAsyncioTestCase):
-    async def test_fastapi_startup_ensures_selected_local_embedding_model(self) -> None:
+def _fn(coro):
+    return getattr(coro, "fn", coro)
+
+
+class EmbeddingStartupTests(unittest.IsolatedAsyncioTestCase):
+    """Both adapters share one `tinysearch.core._ensure_local_bundle_for_config`."""
+
+    async def test_ensures_selected_local_embedding_model(self) -> None:
         cfg = {"embedding_backend": "onnx", "embedding_model": "balanced"}
 
-        with patch("services.onnx_bundle_service.ensure_onnx_bundle_sync") as ensure:
-            await ensure_fastapi_bundle(cfg)
+        with patch("tinysearch.services.onnx_bundle_service.ensure_onnx_bundle_sync") as ensure:
+            await _ensure_local_bundle_for_config(cfg)
 
         ensure.assert_called_once_with("balanced")
 
-    async def test_fastapi_startup_skips_openai_compatible_backend(self) -> None:
+    async def test_skips_openai_compatible_backend(self) -> None:
         cfg = {"embedding_backend": "openai_compatible", "embedding_model": "balanced"}
 
-        with patch("services.onnx_bundle_service.ensure_onnx_bundle_sync") as ensure:
-            await ensure_fastapi_bundle(cfg)
+        with patch("tinysearch.services.onnx_bundle_service.ensure_onnx_bundle_sync") as ensure:
+            await _ensure_local_bundle_for_config(cfg)
 
         ensure.assert_not_called()
 
 
-class FastApiResearchParityTests(unittest.IsolatedAsyncioTestCase):
+class ResearchParityTests(unittest.IsolatedAsyncioTestCase):
+    """Both adapters delegate to the same `tinysearch.core.research`."""
+
     async def test_research_uses_same_config_defaults_as_mcp(self) -> None:
-        config = dict(DEFAULT_RESEARCH_CONFIG)
-        config["embedding_backend"] = "openai_compatible"
-        run = AsyncMock(return_value=SimpleNamespace(answer="grounded prompt"))
-
-        with patch(
-            "servers.fastapi_server.load_research_config", return_value=config
-        ), patch("servers.fastapi_server.agentic_run", new=run):
-            response = await research_endpoint(ResearchRequest(query="  test query  "))
-
-        self.assertEqual(response, {"answer": "grounded prompt"})
-        run.assert_awaited_once_with(
-            "test query",
-            **research_run_kwargs(config),
-            trace_path=config_trace_path(config),
+        result = result_envelope(
+            operation="research",
+            status="ok",
+            query="test query",
+            sources=[],
         )
+        core_research = AsyncMock(return_value=result)
+        with patch("tinysearch.core.research", core_research):
+            fastapi_response = await research_endpoint(
+                ResearchRequest(query="  test query  ")
+            )
+            mcp_response = await _fn(mcp_research)("  test query  ")
+
+        self.assertEqual(fastapi_response, mcp_response)
+        self.assertIn("SEARCH-GROUNDED ANSWER PROMPT", fastapi_response["answer"])
 
     async def test_research_rejects_whitespace_only_query(self) -> None:
-        with patch(
-            "servers.fastapi_server.load_research_config",
-            return_value=dict(DEFAULT_RESEARCH_CONFIG),
-        ):
-            with self.assertRaisesRegex(ValueError, "query must not be empty"):
-                await research_endpoint(ResearchRequest(query="   "))
+        with self.assertRaisesRegex(ValueError, "query must not be empty"):
+            await research_endpoint(ResearchRequest(query="   "))
 
 
 class ServerRuntimeMetadataTests(unittest.TestCase):
@@ -78,24 +81,6 @@ class ServerRuntimeMetadataTests(unittest.TestCase):
         self.assertEqual(normalize_research_query("  hello  "), "hello")
         with self.assertRaisesRegex(ValueError, "query must not be empty"):
             normalize_research_query("  ")
-
-
-class McpEmbeddingStartupTests(unittest.TestCase):
-    def test_mcp_startup_ensures_selected_local_embedding_model(self) -> None:
-        cfg = {"embedding_backend": "onnx", "embedding_model": "quality"}
-
-        with patch("services.onnx_bundle_service.ensure_onnx_bundle_sync") as ensure:
-            ensure_mcp_bundle(cfg)
-
-        ensure.assert_called_once_with("quality")
-
-    def test_mcp_startup_skips_openai_compatible_backend(self) -> None:
-        cfg = {"embedding_backend": "openai_compatible", "embedding_model": "quality"}
-
-        with patch("services.onnx_bundle_service.ensure_onnx_bundle_sync") as ensure:
-            ensure_mcp_bundle(cfg)
-
-        ensure.assert_not_called()
 
 
 class McpCorsConfigTests(unittest.TestCase):

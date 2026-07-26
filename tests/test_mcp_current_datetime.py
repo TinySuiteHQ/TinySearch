@@ -4,8 +4,8 @@ import unittest
 from inspect import signature
 from unittest.mock import patch
 
-from servers.mcp_server import get_current_datetime_tool
-from servers.fastapi_server import current_datetime_endpoint
+from tinysearch.servers.mcp_server import get_current_datetime_tool
+from tinysearch.servers.fastapi_server import current_datetime_endpoint
 
 
 def _fn(coro):
@@ -18,7 +18,7 @@ class McpCurrentDatetimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_current_datetime_payload(self) -> None:
         with patch(
-            "servers.mcp_server.current_datetime_payload",
+            "tinysearch.core.get_current_datetime",
             return_value={
                 "date_utc": "2026-06-28",
                 "time_utc": "08:10:00",
@@ -31,13 +31,7 @@ class McpCurrentDatetimeTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_mcp_and_fastapi_return_same_payload(self) -> None:
         with patch(
-            "servers.mcp_server.current_datetime_payload",
-            return_value={
-                "date_utc": "2026-06-28",
-                "time_utc": "08:10:00",
-            },
-        ), patch(
-            "servers.fastapi_server.current_datetime_payload",
+            "tinysearch.core.get_current_datetime",
             return_value={
                 "date_utc": "2026-06-28",
                 "time_utc": "08:10:00",

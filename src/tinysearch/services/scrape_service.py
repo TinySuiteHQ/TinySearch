@@ -1,9 +1,7 @@
 """Single-URL scrape orchestrator backing /scrape and the MCP scrape_url tool.
 
-Implements upstream issue #10: validate the URL, fetch it through the existing
-Crawl4AI path or the bundled PDF/DOCX extractor, chunk and rank the extracted
-markdown against the caller's query, select chunks under a token budget, and
-return a grounded answer prompt plus token accounting.
+Validate a URL, fetch it, rank extracted chunks against the caller's query,
+and return structured selected evidence plus token accounting.
 """
 
 from __future__ import annotations
@@ -18,21 +16,19 @@ from html.parser import HTMLParser
 from typing import Any
 from urllib.parse import urlsplit
 
-from services.grounded_prompt_service import format_url_grounded_prompt
-from services.site_crawl_service import (
+from tinysearch.services.site_crawl_service import (
     _extract_document_text,
     _is_document_url,
     _url_path_suffix,
     fetch_html_for_query,
     rank_chunks_bm25,
 )
-from services.text_chunking_service import chunk_text
-from services.token_counter_service import (
+from tinysearch.services.text_chunking_service import chunk_text
+from tinysearch.services.token_counter_service import (
     decode_tokens,
     encode_tokens,
-    token_count,
 )
-from services.url_safety_service import (
+from tinysearch.services.url_safety_service import (
     BlockedUrlError,
     InvalidUrlError,
     assert_url_is_fetchable,
@@ -74,12 +70,11 @@ SCRAPE_ERROR_MAP: dict[type, tuple[str, int]] = {
 
 @dataclass(frozen=True)
 class ScrapeResult:
-    answer: str
     url: str
     title: str
     query: str
+    chunks: list[dict[str, Any]]
     content_tokens: int
-    answer_tokens: int
     truncated: bool
     retrieved_at: str
     metadata: dict[str, str | None] | None = None
@@ -272,7 +267,7 @@ async def scrape_url(
     crawl_fn: HtmlCrawlFn | None = None,
     document_fn: DocumentExtractFn | None = None,
 ) -> ScrapeResult:
-    """Inspect a single URL and return a grounded answer prompt for `query`.
+    """Inspect a single URL and return selected evidence for `query`.
 
     `config` carries the research-config values we need (blocked_domains,
     crawl/chunk parameters, pipeline_timeout_seconds). `tokenizer_name` is
@@ -362,21 +357,12 @@ async def scrape_url(
     else:
         metadata = _extract_metadata(crawl_metadata, html)
 
-    answer = format_url_grounded_prompt(
-        question=cleaned_query,
-        url=final_url,
-        title=title,
-        ranked_chunks=selected,
-    )
-    answer_tokens = token_count(answer, tokenizer_name)
-
     return ScrapeResult(
-        answer=answer,
         url=final_url,
         title=title,
         query=cleaned_query,
+        chunks=selected,
         content_tokens=content_tokens,
-        answer_tokens=answer_tokens,
         truncated=truncated,
         retrieved_at=_utc_iso8601_z(),
         metadata=metadata,

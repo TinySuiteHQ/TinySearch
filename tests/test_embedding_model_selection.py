@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import numpy as np
 
-from services import embedding_service
-from services.embedding_service import (
+from tinysearch.services import embedding_service
+from tinysearch.services.embedding_service import (
     LocalEmbeddingModelSpec,
     _LoadedOnnxBundle,
     _embed_onnx_sync,
@@ -18,8 +18,8 @@ from services.embedding_service import (
     normalize_embedding_backend,
     resolve_local_embedding_model_spec,
 )
-from services.onnx_bundle_service import ensure_onnx_bundle_sync
-from services.research_config_service import load_research_config, research_tokenizer_name
+from tinysearch.services.onnx_bundle_service import ensure_onnx_bundle_sync
+from tinysearch.services.research_config_service import load_research_config, research_tokenizer_name
 
 
 class EmbeddingModelSelectionTests(unittest.TestCase):
@@ -155,7 +155,7 @@ class OnnxBundleDownloadTests(unittest.TestCase):
             (bundle_dir / "tokenizer.json").write_text("{}", encoding="utf-8")
 
             with patch.dict(os.environ, {"TINYSEARCH_ONNX_MODEL_DIR": td}):
-                with patch("services.onnx_bundle_service.snapshot_download") as download:
+                with patch("tinysearch.services.onnx_bundle_service.snapshot_download") as download:
                     ensure_onnx_bundle_sync("fast")
 
             download.assert_not_called()
@@ -169,7 +169,7 @@ class OnnxBundleDownloadTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"TINYSEARCH_ONNX_MODEL_DIR": td}):
                 with patch(
-                    "services.onnx_bundle_service.snapshot_download",
+                    "tinysearch.services.onnx_bundle_service.snapshot_download",
                     side_effect=fake_download,
                 ) as download:
                     ensure_onnx_bundle_sync("fast")
@@ -186,7 +186,7 @@ class OnnxBundleDownloadTests(unittest.TestCase):
 
             with patch.dict(os.environ, {"TINYSEARCH_ONNX_MODEL_DIR": td}):
                 with patch(
-                    "services.onnx_bundle_service.snapshot_download",
+                    "tinysearch.services.onnx_bundle_service.snapshot_download",
                     side_effect=fake_download,
                 ):
                     with self.assertRaisesRegex(RuntimeError, "incomplete"):

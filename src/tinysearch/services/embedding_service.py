@@ -25,7 +25,7 @@ SUPPORTED_EMBEDDING_BACKENDS = (
 )
 LEGACY_ONNX_BACKEND_ALIASES = ("default", "local", "sentence_transformers")
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _EMBED_LOCK = threading.Lock()
 
 
@@ -94,7 +94,12 @@ def _models_dir() -> Path:
     raw_override = os.environ.get("TINYSEARCH_MODELS_DIR", "").strip()
     if raw_override:
         return Path(raw_override).expanduser().resolve()
-    return (_PROJECT_ROOT / "models").resolve()
+    repo_models_dir = (_PROJECT_ROOT / "models").resolve()
+    if repo_models_dir.is_dir():
+        return repo_models_dir
+    from tinysearch.paths import native_models_dir
+
+    return native_models_dir()
 
 
 def _safe_model_dir_name(model_name: str) -> str:

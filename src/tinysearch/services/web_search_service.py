@@ -396,7 +396,7 @@ def _searxng_search(
 
 def _load_search_config() -> dict[str, Any]:
     # Lazy import to avoid a circular dependency with research_config_service.
-    from services.research_config_service import load_research_config
+    from tinysearch.services.research_config_service import load_research_config
 
     return load_research_config()
 
@@ -466,7 +466,12 @@ def _dispatch_search(
         raise
 
 
-def search(query: str, limit: int = 10) -> list[SearchResult]:
+def search(
+    query: str,
+    limit: int = 10,
+    *,
+    config: dict[str, Any] | None = None,
+) -> list[SearchResult]:
     """
     Run a web search using the configured backend.
 
@@ -475,8 +480,8 @@ def search(query: str, limit: int = 10) -> list[SearchResult]:
       URL:
       Text:
     """
-    config = _load_search_config()
-    return _dispatch_search(query, limit, config=config)
+    resolved_config = _load_search_config() if config is None else config
+    return _dispatch_search(query, limit, config=resolved_config)
 
 
 def search_to_markdown(search_results: list[SearchResult]) -> str:

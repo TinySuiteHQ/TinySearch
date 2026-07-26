@@ -8,8 +8,8 @@ from contextlib import contextmanager
 from typing import Any
 from unittest.mock import patch
 
-from services import web_search_service
-from services.web_search_service import (
+from tinysearch.services import web_search_service
+from tinysearch.services.web_search_service import (
     BRAVE_API_KEY_ENV_VAR,
     DEFAULT_SEARXNG_URL,
     SearchBackendBlocked,
@@ -693,7 +693,7 @@ class DispatcherTests(unittest.TestCase):
 
 class ConfigCoercionTests(unittest.TestCase):
     def test_default_search_backend_is_ddgs(self) -> None:
-        from services.research_config_service import DEFAULT_RESEARCH_CONFIG
+        from tinysearch.services.research_config_service import DEFAULT_RESEARCH_CONFIG
 
         self.assertEqual(DEFAULT_RESEARCH_CONFIG["search_backend"], "ddgs")
         self.assertEqual(
@@ -705,7 +705,7 @@ class ConfigCoercionTests(unittest.TestCase):
         self.assertEqual(DEFAULT_RESEARCH_CONFIG["ddgs_backend"], "auto")
 
     def test_coerce_config_defaults_to_ddgs_backend(self) -> None:
-        from services.research_config_service import _coerce_config
+        from tinysearch.services.research_config_service import _coerce_config
 
         config = _coerce_config({})
         self.assertEqual(config["search_backend"], "ddgs")
@@ -713,46 +713,46 @@ class ConfigCoercionTests(unittest.TestCase):
         self.assertEqual(config["ddgs_backend"], "auto")
 
     def test_coerce_config_accepts_ddgs_overrides(self) -> None:
-        from services.research_config_service import _coerce_config
+        from tinysearch.services.research_config_service import _coerce_config
 
         config = _coerce_config({"ddgs_timeout_seconds": "5", "ddgs_backend": "brave"})
         self.assertEqual(config["ddgs_timeout_seconds"], 5.0)
         self.assertEqual(config["ddgs_backend"], "brave")
 
     def test_ddgs_backend_is_allowed(self) -> None:
-        from services.research_config_service import _coerce_config
+        from tinysearch.services.research_config_service import _coerce_config
 
         config = _coerce_config({"search_backend": "ddgs"})
         self.assertEqual(config["search_backend"], "ddgs")
 
     def test_invalid_backend_raises(self) -> None:
-        from services.research_config_service import _coerce_config
+        from tinysearch.services.research_config_service import _coerce_config
 
         with self.assertRaises(ValueError):
             _coerce_config({"search_backend": "yandex"})
 
     def test_country_aliases_to_region(self) -> None:
-        from services.research_config_service import _coerce_config
+        from tinysearch.services.research_config_service import _coerce_config
 
         config = _coerce_config({"search_country": "us-en"})
         self.assertEqual(config["search_region"], "us-en")
         self.assertNotIn("search_country", config)
 
     def test_engines_comma_string_is_normalized_to_list(self) -> None:
-        from services.research_config_service import _coerce_config
+        from tinysearch.services.research_config_service import _coerce_config
 
         config = _coerce_config({"search_engines": "google, bing , duckduckgo"})
         self.assertEqual(config["search_engines"], ["google", "bing", "duckduckgo"])
 
-    def test_searxng_url_env_overrides_config(self) -> None:
-        from services.research_config_service import _coerce_config
+    def test_environment_does_not_override_core_config_coercion(self) -> None:
+        from tinysearch.services.research_config_service import _coerce_config
 
         with patch.dict("os.environ", {"SEARXNG_URL": "http://example.test/search"}):
             config = _coerce_config({"search_backend_url": "http://other:8080/"})
-        self.assertEqual(config["search_backend_url"], "http://example.test/search")
+        self.assertEqual(config["search_backend_url"], "http://other:8080/")
 
     def test_duckduckgo_backend_preserves_existing_behavior(self) -> None:
-        from services.research_config_service import _coerce_config
+        from tinysearch.services.research_config_service import _coerce_config
 
         config = _coerce_config({"search_backend": "duckduckgo"})
         self.assertEqual(config["search_backend"], "duckduckgo")

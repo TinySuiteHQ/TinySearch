@@ -32,20 +32,21 @@ from datetime import timedelta
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+_SRC_ROOT = _PROJECT_ROOT / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
 
 import anyio
 import mcp.types as types
 from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
-from services.embedding_service import (
+from tinysearch.services.embedding_service import (
     normalize_embedding_backend,
     onnx_backend_will_use_onnx_bundle,
 )
-from services.onnx_bundle_service import ensure_onnx_bundle_sync
-from services.research_config_service import load_research_config
+from tinysearch.services.onnx_bundle_service import ensure_onnx_bundle_sync
+from tinysearch.services.research_config_service import load_research_config
 
 
 def _phase(label: str, t0: float, enabled: bool) -> None:
