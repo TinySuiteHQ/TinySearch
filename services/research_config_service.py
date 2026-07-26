@@ -51,11 +51,13 @@ DEFAULT_RESEARCH_CONFIG: dict[str, Any] = {
     "dense_document_prefix": "",
     "dense_document_embed_batch_size": 32,
     "blocked_domains": [],
-    "search_backend": "searxng",
+    "search_backend": "ddgs",
     "search_backend_url": DEFAULT_SEARXNG_URL,
     "search_engines": [],
     "search_region": "",
     "search_backend_fallback": True,
+    "ddgs_timeout_seconds": 20.0,
+    "ddgs_backend": "auto",
     "trace_path": "",
 }
 
@@ -83,6 +85,7 @@ _FLOAT_FIELDS = {
     "crawl_bm25_threshold",
     "crawl_pruning_threshold",
     "embedding_timeout_seconds",
+    "ddgs_timeout_seconds",
 }
 
 
@@ -106,6 +109,7 @@ def _coerce_config(raw: dict[str, Any]) -> dict[str, Any]:
         "dense_document_prefix",
         "crawl_fit_markdown_mode",
         "crawl_bm25_language",
+        "ddgs_backend",
         "trace_path",
     ):
         if config.get(key) is not None:

@@ -4,24 +4,70 @@ import json
 import socket
 import unittest
 import urllib.error
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import patch
 
 from services import web_search_service
 from services.web_search_service import (
+    BRAVE_API_KEY_ENV_VAR,
     DEFAULT_SEARXNG_URL,
     SearchBackendBlocked,
     SearchBackendError,
     SearchBackendUnavailable,
     SearchResult,
+    _brave_search,
+    _ddgs_search,
     _dispatch_search,
-    _duckduckgo_search,
     _searxng_search,
+    _with_brave_fallback,
     filter_blocked_search_results,
     is_blocked_domain,
     normalize_domain,
     search,
 )
+
+
+class _FakeDDGSException(Exception):
+    pass
+
+
+class _FakeRatelimitException(_FakeDDGSException):
+    pass
+
+
+class _FakeTimeoutException(_FakeDDGSException):
+    pass
+
+
+class _FakeDDGS:
+    """Stand-in for ddgs.DDGS used to unit-test `_ddgs_search` without network access."""
+
+    calls: list[dict[str, Any]] = []
+    _result: Any = []
+    _raise: BaseException | None = None
+
+    def __init__(self, timeout: Any = None) -> None:
+        self.timeout = timeout
+
+    def text(self, query: str, **kwargs: Any) -> Any:
+        type(self).calls.append({"query": query, "timeout": self.timeout, **kwargs})
+        if type(self)._raise is not None:
+            raise type(self)._raise
+        return type(self)._result
+
+
+@contextmanager
+def _patch_ddgs(result: Any = None, raise_: BaseException | None = None):
+    _FakeDDGS.calls = []
+    _FakeDDGS._result = result if result is not None else []
+    _FakeDDGS._raise = raise_
+    with patch.object(web_search_service, "_ddgs_cls", return_value=_FakeDDGS), patch.object(
+        web_search_service,
+        "_ddgs_exceptions",
+        return_value=(_FakeDDGSException, _FakeRatelimitException, _FakeTimeoutException),
+    ):
+        yield _FakeDDGS
 
 
 class _FakeHeaders:
@@ -222,80 +268,256 @@ class SearXNGBackendTests(unittest.TestCase):
         self.assertEqual(results, [])
 
 
-class DuckDuckGoBackendTests(unittest.TestCase):
-    _RESULT_HTML = (
-        "<html><body>"
-        '<a class="result__a" href="https://example.com/page">Example Title</a>'
-        '<a class="result__snippet">Example snippet.</a>'
-        "</body></html>"
-    )
+class DdgsSearchTests(unittest.TestCase):
+    def test_ddgs_maps_title_href_body_to_search_results(self) -> None:
+        raw = [
+            {"title": "Example Title", "href": "https://example.com/page", "body": "Example snippet."},
+            {"title": "Second", "href": "https://example.com/2", "body": ""},
+        ]
+        with _patch_ddgs(result=raw) as fake_cls:
+            results = _ddgs_search("anything", 5, region="us-en", backend="auto", timeout=20.0)
 
-    def test_ddg_returns_results_on_valid_html(self) -> None:
-        with patch.object(
-            web_search_service,
-            "urlopen",
-            new=_make_urlopen_returning(self._RESULT_HTML, content_type="text/html"),
-        ):
-            results = _duckduckgo_search("anything", 5)
-
-        self.assertEqual(len(results), 1)
+        self.assertEqual(len(results), 2)
         self.assertEqual(results[0].title, "Example Title")
         self.assertEqual(results[0].url, "https://example.com/page")
         self.assertEqual(results[0].text, "Example snippet.")
+        self.assertEqual(results[0].result_id, 1)
+        call = fake_cls.calls[0]
+        self.assertEqual(call["query"], "anything")
+        self.assertEqual(call["timeout"], 20.0)
+        self.assertEqual(call["region"], "us-en")
+        self.assertEqual(call["safesearch"], "moderate")
+        self.assertEqual(call["max_results"], 5)
+        self.assertEqual(call["backend"], "auto")
 
-    def test_ddg_valid_page_without_matches_returns_empty(self) -> None:
-        with patch.object(
-            web_search_service,
-            "urlopen",
-            new=_make_urlopen_returning(
-                "<html><body><p>No results for your query.</p></body></html>",
-                content_type="text/html",
-            ),
-        ):
-            results = _duckduckgo_search("anything", 5)
+    def test_ddgs_omits_region_when_not_provided(self) -> None:
+        with _patch_ddgs(result=[]) as fake_cls:
+            _ddgs_search("anything", 5, region=None, backend="auto", timeout=20.0)
+
+        self.assertNotIn("region", fake_cls.calls[0])
+
+    def test_ddgs_respects_limit(self) -> None:
+        raw = [
+            {"title": f"r{i}", "href": f"https://example.com/{i}", "body": ""}
+            for i in range(10)
+        ]
+        with _patch_ddgs(result=raw):
+            results = _ddgs_search("q", 3, backend="auto", timeout=20.0)
+        self.assertEqual(len(results), 3)
+
+    def test_ddgs_skips_malformed_individual_results(self) -> None:
+        raw = [
+            {"title": "", "href": "https://example.com/missing-title", "body": ""},
+            {"title": "No URL", "href": "", "body": ""},
+            {"title": "Good", "href": "https://example.com/good", "body": "ok"},
+        ]
+        with _patch_ddgs(result=raw):
+            results = _ddgs_search("q", 5, backend="auto", timeout=20.0)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Good")
+
+    def test_ddgs_fully_malformed_response_raises_unavailable(self) -> None:
+        with _patch_ddgs(result={"not": "a list"}):
+            with self.assertRaises(SearchBackendUnavailable):
+                _ddgs_search("q", 5, backend="auto", timeout=20.0)
+
+    def test_ddgs_empty_results_is_not_an_error(self) -> None:
+        with _patch_ddgs(result=[]):
+            results = _ddgs_search("q", 5, backend="auto", timeout=20.0)
         self.assertEqual(results, [])
 
-    def test_ddg_403_raises_blocked(self) -> None:
-        http_error = urllib.error.HTTPError(
-            "https://html.duckduckgo.com/html/", 403, "Forbidden", {}, None
-        )
-        with patch.object(
-            web_search_service, "urlopen", new=_make_urlopen_raising(http_error)
-        ):
-            with self.assertRaises(SearchBackendBlocked):
-                _duckduckgo_search("anything", 5)
+    def test_ddgs_no_results_found_exception_returns_empty(self) -> None:
+        with _patch_ddgs(raise_=_FakeDDGSException("No results found.")):
+            results = _ddgs_search("q", 5, backend="auto", timeout=20.0)
+        self.assertEqual(results, [])
 
-    def test_ddg_429_raises_blocked(self) -> None:
-        http_error = urllib.error.HTTPError(
-            "https://html.duckduckgo.com/html/", 429, "Too Many", {}, None
-        )
-        with patch.object(
-            web_search_service, "urlopen", new=_make_urlopen_raising(http_error)
-        ):
-            with self.assertRaises(SearchBackendBlocked):
-                _duckduckgo_search("anything", 5)
+    def test_ddgs_timeout_raises_unavailable(self) -> None:
+        with _patch_ddgs(raise_=_FakeTimeoutException("timed out")):
+            with self.assertRaises(SearchBackendUnavailable):
+                _ddgs_search("q", 5, backend="auto", timeout=20.0)
 
-    def test_ddg_challenge_page_raises_blocked(self) -> None:
-        challenge_html = (
-            "<html><body><div class='anomaly-modal'>"
-            "Please verify you are human</div></body></html>"
-        )
+    def test_ddgs_ratelimit_raises_blocked(self) -> None:
+        with _patch_ddgs(raise_=_FakeRatelimitException("rate limited")):
+            with self.assertRaises(SearchBackendBlocked):
+                _ddgs_search("q", 5, backend="auto", timeout=20.0)
+
+    def test_ddgs_generic_exception_raises_unavailable(self) -> None:
+        with _patch_ddgs(raise_=_FakeDDGSException("boom")):
+            with self.assertRaises(SearchBackendUnavailable):
+                _ddgs_search("q", 5, backend="auto", timeout=20.0)
+
+
+class BraveSearchTests(unittest.TestCase):
+    def test_brave_maps_web_results_to_search_results(self) -> None:
+        payload = {
+            "web": {
+                "results": [
+                    {
+                        "title": "Async tasks in Python",
+                        "url": "https://example.com/python",
+                        "description": "Coroutines and tasks.",
+                    },
+                    {"title": "No URL", "url": "", "description": "skip me"},
+                ]
+            }
+        }
+        with patch.object(
+            web_search_service, "urlopen", new=_make_urlopen_returning(json.dumps(payload))
+        ):
+            results = _brave_search("python async", 5, api_key="secret-key")
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Async tasks in Python")
+        self.assertEqual(results[0].url, "https://example.com/python")
+        self.assertEqual(results[0].text, "Coroutines and tasks.")
+
+    def test_brave_sends_auth_header_and_params(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_urlopen(req: Any, timeout: Any = None) -> _FakeUrlopenResponse:
+            captured["url"] = req.full_url
+            captured["header"] = req.get_header("X-subscription-token")
+            return _FakeUrlopenResponse(json.dumps({"web": {"results": []}}))
+
+        with patch.object(web_search_service, "urlopen", new=fake_urlopen):
+            _brave_search("python async", 5, api_key="secret-key")
+
+        self.assertIn("q=python", captured["url"].replace("+", " "))
+        self.assertEqual(captured["header"], "secret-key")
+
+    def test_brave_empty_results_is_not_an_error(self) -> None:
         with patch.object(
             web_search_service,
             "urlopen",
-            new=_make_urlopen_returning(challenge_html, content_type="text/html"),
+            new=_make_urlopen_returning(json.dumps({"web": {"results": []}})),
         ):
-            with self.assertRaises(SearchBackendBlocked):
-                _duckduckgo_search("anything", 5)
+            results = _brave_search("q", 5, api_key="secret-key")
+        self.assertEqual(results, [])
 
-    def test_ddg_network_error_raises_unavailable(self) -> None:
+    def test_brave_401_raises_blocked(self) -> None:
+        http_error = urllib.error.HTTPError(
+            "https://api.search.brave.com/res/v1/web/search", 401, "Unauthorized", {}, None
+        )
+        with patch.object(web_search_service, "urlopen", new=_make_urlopen_raising(http_error)):
+            with self.assertRaises(SearchBackendBlocked):
+                _brave_search("q", 5, api_key="bad-key")
+
+    def test_brave_network_error_raises_unavailable(self) -> None:
         with patch.object(
             web_search_service,
             "urlopen",
             new=_make_urlopen_raising(urllib.error.URLError("no network")),
         ):
             with self.assertRaises(SearchBackendUnavailable):
-                _duckduckgo_search("anything", 5)
+                _brave_search("q", 5, api_key="secret-key")
+
+    def test_brave_malformed_response_raises_unavailable(self) -> None:
+        with patch.object(
+            web_search_service,
+            "urlopen",
+            new=_make_urlopen_returning("not json", content_type="text/html"),
+        ):
+            with self.assertRaises(SearchBackendUnavailable):
+                _brave_search("q", 5, api_key="secret-key")
+
+    def test_brave_key_never_appears_in_raised_exception_message(self) -> None:
+        http_error = urllib.error.HTTPError(
+            "https://api.search.brave.com/res/v1/web/search?token=super-secret-key",
+            403,
+            "Forbidden",
+            {},
+            None,
+        )
+        with patch.object(web_search_service, "urlopen", new=_make_urlopen_raising(http_error)):
+            with self.assertRaises(SearchBackendBlocked) as cm:
+                _brave_search("q", 5, api_key="super-secret-key")
+        self.assertNotIn("super-secret-key", str(cm.exception))
+
+
+class BraveFallbackTests(unittest.TestCase):
+    def test_ddgs_error_with_key_calls_brave(self) -> None:
+        def failing_primary() -> list[SearchResult]:
+            raise SearchBackendUnavailable("ddgs down")
+
+        with patch.dict("os.environ", {BRAVE_API_KEY_ENV_VAR: "secret-key"}), patch.object(
+            web_search_service,
+            "_brave_search",
+            return_value=[SearchResult(1, "Brave", "https://brave.example/", "")],
+        ) as brave_mock:
+            results = _with_brave_fallback(failing_primary, "q", 5)
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Brave")
+        brave_mock.assert_called_once_with("q", 5, api_key="secret-key")
+
+    def test_ddgs_error_without_key_propagates_unchanged(self) -> None:
+        original = SearchBackendUnavailable("ddgs down")
+
+        def failing_primary() -> list[SearchResult]:
+            raise original
+
+        with patch.dict("os.environ", {}, clear=True), patch.object(
+            web_search_service, "_brave_search"
+        ) as brave_mock:
+            with self.assertRaises(SearchBackendUnavailable) as cm:
+                _with_brave_fallback(failing_primary, "q", 5)
+
+        self.assertIs(cm.exception, original)
+        brave_mock.assert_not_called()
+
+    def test_ddgs_empty_with_key_calls_brave(self) -> None:
+        def empty_primary() -> list[SearchResult]:
+            return []
+
+        with patch.dict("os.environ", {BRAVE_API_KEY_ENV_VAR: "secret-key"}), patch.object(
+            web_search_service,
+            "_brave_search",
+            return_value=[SearchResult(1, "Brave", "https://brave.example/", "")],
+        ) as brave_mock:
+            results = _with_brave_fallback(empty_primary, "q", 5)
+
+        self.assertEqual(len(results), 1)
+        brave_mock.assert_called_once_with("q", 5, api_key="secret-key")
+
+    def test_ddgs_empty_without_key_returns_empty_and_skips_brave(self) -> None:
+        def empty_primary() -> list[SearchResult]:
+            return []
+
+        with patch.dict("os.environ", {}, clear=True), patch.object(
+            web_search_service, "_brave_search"
+        ) as brave_mock:
+            results = _with_brave_fallback(empty_primary, "q", 5)
+
+        self.assertEqual(results, [])
+        brave_mock.assert_not_called()
+
+    def test_both_fail_raises_single_error_without_leaking_key(self) -> None:
+        def failing_primary() -> list[SearchResult]:
+            raise SearchBackendUnavailable("ddgs down")
+
+        with patch.dict(
+            "os.environ", {BRAVE_API_KEY_ENV_VAR: "super-secret-key"}
+        ), patch.object(
+            web_search_service,
+            "_brave_search",
+            side_effect=SearchBackendUnavailable("brave down"),
+        ):
+            with self.assertRaises(SearchBackendUnavailable) as cm:
+                _with_brave_fallback(failing_primary, "q", 5)
+
+        self.assertNotIn("super-secret-key", str(cm.exception))
+
+    def test_missing_key_never_invokes_brave_for_success_case(self) -> None:
+        def successful_primary() -> list[SearchResult]:
+            return [SearchResult(1, "ok", "https://example.com/", "")]
+
+        with patch.dict("os.environ", {}, clear=True), patch.object(
+            web_search_service, "_brave_search"
+        ) as brave_mock:
+            results = _with_brave_fallback(successful_primary, "q", 5)
+
+        self.assertEqual(len(results), 1)
+        brave_mock.assert_not_called()
 
 
 class DispatcherTests(unittest.TestCase):
@@ -314,35 +536,36 @@ class DispatcherTests(unittest.TestCase):
 
     def test_default_backend_calls_searxng(self) -> None:
         searxng_calls: list[tuple[str, int]] = []
-        ddg_calls: list[tuple[str, int]] = []
+        ddgs_calls: list[tuple[str, int]] = []
 
         def fake_searxng(query: str, limit: int, **_: Any) -> list[SearchResult]:
             searxng_calls.append((query, limit))
             return [SearchResult(1, "ok", "https://example.com/", "")]
 
-        def fake_ddg(query: str, limit: int) -> list[SearchResult]:
-            ddg_calls.append((query, limit))
+        def fake_ddgs(query: str, limit: int, **_: Any) -> list[SearchResult]:
+            ddgs_calls.append((query, limit))
             return []
 
         with patch.object(web_search_service, "_searxng_search", new=fake_searxng), patch.object(
-            web_search_service, "_duckduckgo_search", new=fake_ddg
+            web_search_service, "_ddgs_search", new=fake_ddgs
         ):
             results = _dispatch_search("q", 5, config=self._config())
 
         self.assertEqual(len(results), 1)
         self.assertEqual(len(searxng_calls), 1)
-        self.assertEqual(ddg_calls, [])
+        self.assertEqual(ddgs_calls, [])
 
-    def test_searxng_failure_falls_back_to_ddg_when_enabled(self) -> None:
+    def test_searxng_failure_falls_back_to_ddgs_duckduckgo_when_enabled(self) -> None:
         def failing_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
             raise SearchBackendUnavailable("searxng down")
 
-        def fake_ddg(query: str, limit: int) -> list[SearchResult]:
+        def fake_ddgs(query: str, limit: int, **kwargs: Any) -> list[SearchResult]:
+            self.assertEqual(kwargs.get("backend"), "duckduckgo")
             return [SearchResult(1, "DDG", "https://duck.example/", "snippet")]
 
         with patch.object(
             web_search_service, "_searxng_search", new=failing_searxng
-        ), patch.object(web_search_service, "_duckduckgo_search", new=fake_ddg):
+        ), patch.object(web_search_service, "_ddgs_search", new=fake_ddgs):
             results = _dispatch_search(
                 "q", 5, config=self._config(search_backend_fallback=True)
             )
@@ -354,29 +577,30 @@ class DispatcherTests(unittest.TestCase):
         def failing_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
             raise SearchBackendUnavailable("searxng down")
 
-        def fake_ddg(query: str, limit: int) -> list[SearchResult]:
-            self.fail("DDG should not be called when fallback is disabled")
+        def fake_ddgs(query: str, limit: int, **_: Any) -> list[SearchResult]:
+            self.fail("ddgs should not be called when fallback is disabled")
             return []
 
         with patch.object(
             web_search_service, "_searxng_search", new=failing_searxng
-        ), patch.object(web_search_service, "_duckduckgo_search", new=fake_ddg):
+        ), patch.object(web_search_service, "_ddgs_search", new=fake_ddgs):
             with self.assertRaises(SearchBackendError):
                 _dispatch_search(
                     "q", 5, config=self._config(search_backend_fallback=False)
                 )
 
-    def test_duckduckgo_backend_skips_searxng_entirely(self) -> None:
+    def test_duckduckgo_backend_skips_searxng_and_delegates_to_ddgs(self) -> None:
         def fake_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
             self.fail("SearXNG should not be called for the duckduckgo backend")
             return []
 
-        def fake_ddg(query: str, limit: int) -> list[SearchResult]:
+        def fake_ddgs(query: str, limit: int, **kwargs: Any) -> list[SearchResult]:
+            self.assertEqual(kwargs.get("backend"), "duckduckgo")
             return [SearchResult(1, "DDG", "https://duck.example/", "snippet")]
 
         with patch.object(
             web_search_service, "_searxng_search", new=fake_searxng
-        ), patch.object(web_search_service, "_duckduckgo_search", new=fake_ddg):
+        ), patch.object(web_search_service, "_ddgs_search", new=fake_ddgs):
             results = _dispatch_search(
                 "q", 5, config=self._config(search_backend="duckduckgo")
             )
@@ -384,16 +608,47 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].title, "DDG")
 
+    def test_ddgs_backend_skips_searxng_and_passes_config(self) -> None:
+        def fake_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
+            self.fail("SearXNG should not be called for the ddgs backend")
+            return []
+
+        captured: dict[str, Any] = {}
+
+        def fake_ddgs(query: str, limit: int, **kwargs: Any) -> list[SearchResult]:
+            captured.update(kwargs)
+            return [SearchResult(1, "DDGS", "https://ddgs.example/", "")]
+
+        with patch.object(
+            web_search_service, "_searxng_search", new=fake_searxng
+        ), patch.object(web_search_service, "_ddgs_search", new=fake_ddgs):
+            results = _dispatch_search(
+                "q",
+                5,
+                config=self._config(
+                    search_backend="ddgs",
+                    search_region="uk-en",
+                    ddgs_backend="brave",
+                    ddgs_timeout_seconds=15.0,
+                ),
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(captured["region"], "uk-en")
+        self.assertEqual(captured["backend"], "brave")
+        self.assertEqual(captured["timeout"], 15.0)
+
     def test_auto_backend_falls_back_regardless_of_fallback_flag(self) -> None:
         def failing_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
             raise SearchBackendUnavailable("nope")
 
-        def fake_ddg(query: str, limit: int) -> list[SearchResult]:
+        def fake_ddgs(query: str, limit: int, **kwargs: Any) -> list[SearchResult]:
+            self.assertEqual(kwargs.get("backend"), "duckduckgo")
             return [SearchResult(1, "DDG", "https://duck.example/", "")]
 
         with patch.object(
             web_search_service, "_searxng_search", new=failing_searxng
-        ), patch.object(web_search_service, "_duckduckgo_search", new=fake_ddg):
+        ), patch.object(web_search_service, "_ddgs_search", new=fake_ddgs):
             results = _dispatch_search(
                 "q",
                 5,
@@ -437,15 +692,38 @@ class DispatcherTests(unittest.TestCase):
 
 
 class ConfigCoercionTests(unittest.TestCase):
-    def test_default_search_backend_is_searxng(self) -> None:
+    def test_default_search_backend_is_ddgs(self) -> None:
         from services.research_config_service import DEFAULT_RESEARCH_CONFIG
 
-        self.assertEqual(DEFAULT_RESEARCH_CONFIG["search_backend"], "searxng")
+        self.assertEqual(DEFAULT_RESEARCH_CONFIG["search_backend"], "ddgs")
         self.assertEqual(
             DEFAULT_RESEARCH_CONFIG["search_backend_url"],
             "http://searxng:8080/search",
         )
         self.assertTrue(DEFAULT_RESEARCH_CONFIG["search_backend_fallback"])
+        self.assertEqual(DEFAULT_RESEARCH_CONFIG["ddgs_timeout_seconds"], 20.0)
+        self.assertEqual(DEFAULT_RESEARCH_CONFIG["ddgs_backend"], "auto")
+
+    def test_coerce_config_defaults_to_ddgs_backend(self) -> None:
+        from services.research_config_service import _coerce_config
+
+        config = _coerce_config({})
+        self.assertEqual(config["search_backend"], "ddgs")
+        self.assertEqual(config["ddgs_timeout_seconds"], 20.0)
+        self.assertEqual(config["ddgs_backend"], "auto")
+
+    def test_coerce_config_accepts_ddgs_overrides(self) -> None:
+        from services.research_config_service import _coerce_config
+
+        config = _coerce_config({"ddgs_timeout_seconds": "5", "ddgs_backend": "brave"})
+        self.assertEqual(config["ddgs_timeout_seconds"], 5.0)
+        self.assertEqual(config["ddgs_backend"], "brave")
+
+    def test_ddgs_backend_is_allowed(self) -> None:
+        from services.research_config_service import _coerce_config
+
+        config = _coerce_config({"search_backend": "ddgs"})
+        self.assertEqual(config["search_backend"], "ddgs")
 
     def test_invalid_backend_raises(self) -> None:
         from services.research_config_service import _coerce_config

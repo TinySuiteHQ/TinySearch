@@ -35,5 +35,7 @@
   "search_engines": [],
   "search_region": "",
   "search_backend_fallback": true,
+  "ddgs_timeout_seconds": 20.0,
+  "ddgs_backend": "auto",
   "trace_path": ""
 }

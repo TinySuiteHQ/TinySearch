@@ -341,7 +341,7 @@ You can also set `embedding_model` to a custom Hugging Face ONNX repo id. Set
 Key settings:
 
 - Search: `search_top_k`, `search_rrf_cutoff`, `search_dense_weight`, `search_max_results_to_keep`, `blocked_domains`
-- Search backend: `search_backend`, `search_backend_url`, `search_engines`, `search_region`, `search_backend_fallback`
+- Search backend: `search_backend`, `search_backend_url`, `search_engines`, `search_region`, `search_backend_fallback`, `ddgs_backend`, `ddgs_timeout_seconds`
 - Chunks: `chunk_rrf_cutoff`, `chunk_dense_weight`, `chunk_max_results_to_keep`
 - Crawl: `crawl_max_chunk_tokens`, `crawl_overlap_tokens`, `max_concurrent_crawls`
 - Embeddings: `embedding_backend`, `embedding_model`, `embedding_openai_env_file`, `max_concurrent_embedding_calls`
@@ -366,39 +366,58 @@ The research pipeline requires dense embeddings. It raises if
 
 ## Search backends
 
-TinySearch supports two web-search backends and selects between them from
-config. The defaults aim at the bundled compose setup: SearXNG runs as a
-sidecar, with the DuckDuckGo HTML scraper kept as an automatic fallback.
+TinySearch supports multiple web-search backends and selects between them
+from config.
 
-Since `v0.2`, TinySearch defaults to a SearXNG-compatible backend. The bundled
-Compose files ship a local SearXNG service so the stack works out of the box,
-while the DuckDuckGo HTML scraper remains available as a configurable fallback.
+Native (non-Docker) installs default to `search_backend: "ddgs"`, which uses
+the [`ddgs`](https://pypi.org/project/ddgs/) package's automatic text-search
+backend selection in-process — no SearXNG deployment required. The bundled
+Docker Compose setup instead defaults to `search_backend: "searxng"`, with a
+local SearXNG sidecar.
 
 Available values for `search_backend`:
 
-- `"searxng"` (default): query a SearXNG-compatible JSON endpoint. If the call
-  fails and `search_backend_fallback` is `true`, TinySearch falls back to
-  DuckDuckGo. With `search_backend_fallback: false` the SearXNG error surfaces.
-- `"duckduckgo"`: skip SearXNG entirely and use the existing DuckDuckGo HTML
-  scraper. This is the escape hatch that preserves pre-0.2 behavior.
-- `"auto"`: try SearXNG, then DuckDuckGo on any backend failure (fallback
-  is implied regardless of `search_backend_fallback`).
+- `"ddgs"` (native default): query `ddgs`'s automatic backend selection
+  directly. Tune it with `ddgs_backend` (defaults to `"auto"`) and
+  `ddgs_timeout_seconds` (defaults to `20`).
+- `"searxng"` (Docker default): query a SearXNG-compatible JSON endpoint. If
+  the call fails and `search_backend_fallback` is `true`, TinySearch falls
+  back to `ddgs` in DuckDuckGo compatibility mode. With
+  `search_backend_fallback: false` the SearXNG error surfaces.
+- `"duckduckgo"`: skip SearXNG entirely and query `ddgs` with
+  `backend="duckduckgo"`. This is the escape hatch that preserves pre-0.4
+  DuckDuckGo-only behavior (previously a hand-written HTML scraper, now
+  DDGS-backed).
+- `"auto"`: try SearXNG, then `ddgs` in DuckDuckGo compatibility mode on any
+  backend failure (fallback is implied regardless of
+  `search_backend_fallback`).
 
 A backend "failure" means a real backend error: network/timeout, non-200 HTTP
-response, a non-JSON SearXNG body, or a DuckDuckGo CAPTCHA / 403. A legitimate
-empty result set is **not** a failure and does not trigger fallback.
+response, a non-JSON SearXNG body, or a `ddgs` rate-limit/error response. A
+legitimate empty result set is **not** a failure and does not trigger
+fallback.
 
 Minimal config example:
 
 ```json
 {
-  "search_backend": "searxng",
-  "search_backend_url": "http://searxng:8080/search",
-  "search_engines": ["google", "bing"],
-  "search_region": "us-en",
-  "search_backend_fallback": true
+  "search_backend": "ddgs",
+  "ddgs_backend": "auto",
+  "ddgs_timeout_seconds": 20,
+  "search_region": "us-en"
 }
 ```
+
+### Brave keyed fallback
+
+Set the `BRAVE_SEARCH_API_KEY` environment variable to enable Brave's
+official Web Search API as a fallback for the `ddgs` and `duckduckgo`
+backends. Brave is only ever consulted when the primary `ddgs` call errors or
+returns no results, and only when the key is present — with no key, DDGS
+failures and legitimate empty results propagate exactly as they would
+otherwise. The key is read from the environment on every call; it is never
+written to a config file, saved, or logged. Brave is not a selectable
+`search_backend` value on its own, and `"searxng"`/`"auto"` never consult it.
 
 ### SearXNG JSON output is required
 
@@ -438,13 +457,17 @@ A minimal `searxng/settings.yml` is committed at the repo root. Override
 
 ### Single-container / from-source
 
-When you run TinySearch standalone (e.g. `docker run marcellm01/tinysearch:latest`
-or `python servers/mcp_server.py`), there is no local SearXNG. With the default
-config (`search_backend: "searxng"`, `search_backend_fallback: true`) the
-SearXNG call fails fast on the short connect timeout and TinySearch
-transparently falls back to DuckDuckGo.
+Running `python servers/mcp_server.py` from a checkout with no
+`configs/research_config.json` present uses the in-code default,
+`search_backend: "ddgs"` — no SearXNG involvement at all. The shipped
+`configs/research_config.json` (used by both Compose files) instead sets
+`search_backend: "searxng"` with `search_backend_fallback: true`; if you run
+that config standalone (e.g. `docker run marcellm01/tinysearch:latest`) with
+no local SearXNG, the call fails fast on the short connect timeout and
+TinySearch transparently falls back to `ddgs` in DuckDuckGo compatibility
+mode.
 
-To keep the pre-0.2 behavior with no SearXNG involvement, set:
+To force DuckDuckGo-only behavior with no SearXNG involvement, set:
 
 ```json
 { "search_backend": "duckduckgo" }
