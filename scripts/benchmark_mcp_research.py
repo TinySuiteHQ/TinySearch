@@ -15,7 +15,7 @@ pipeline embedding timing (`TINYSEARCH_LOG_EMBED_TIMING` in the child process).
 
 By default the benchmark **requires** the ONNX bundle (onnxruntime path) so timings
 match the intended fast path. With `embedding_backend` `onnx` in
-`configs/research_config.json`, this script **prefetches** the bundle via the same
+`configs/tinysearch_config.json`, this script **prefetches** the bundle via the same
 `ensure_onnx_bundle_sync()` used by `servers/mcp_server.py` before spawning the child,
 so the first run does not fail when weights are gitignored. Set
 `_REQUIRE_ONNX_BUNDLE = False` to benchmark with `openai_compatible` embeddings.
@@ -46,7 +46,7 @@ from tinysearch.services.embedding_service import (
     onnx_backend_will_use_onnx_bundle,
 )
 from tinysearch.services.onnx_bundle_service import ensure_onnx_bundle_sync
-from tinysearch.services.research_config_service import load_research_config
+from tinysearch.services.tinysearch_config_service import load_tinysearch_config
 
 
 def _phase(label: str, t0: float, enabled: bool) -> None:
@@ -204,11 +204,11 @@ if __name__ == "__main__":
     if not _LIST_TOOLS_ONLY and not (_QUERY or "").strip():
         raise SystemExit("set _QUERY when _LIST_TOOLS_ONLY is False")
 
-    _cfg = load_research_config()
+    _cfg = load_tinysearch_config()
     _backend = normalize_embedding_backend(str(_cfg["embedding_backend"]))
     if _REQUIRE_ONNX_BUNDLE and _backend != "onnx":
         raise SystemExit(
-            "_REQUIRE_ONNX_BUNDLE is True but configs/research_config.json has "
+            "_REQUIRE_ONNX_BUNDLE is True but configs/tinysearch_config.json has "
             f"embedding_backend={_cfg['embedding_backend']!r} (resolved {_backend!r}). "
             "Use onnx local embeddings or set _REQUIRE_ONNX_BUNDLE = False."
         )

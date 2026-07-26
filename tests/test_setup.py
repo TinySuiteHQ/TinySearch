@@ -10,7 +10,7 @@ class SetupRunTests(unittest.TestCase):
     def test_run_installs_chromium_and_downloads_model(self) -> None:
         config = {"embedding_backend": "onnx", "embedding_model": "fast"}
         with patch.object(setup_module, "_install_chromium") as install, patch.object(
-            setup_module, "load_research_config", return_value=config
+            setup_module, "load_tinysearch_config", return_value=config
         ), patch(
             "tinysearch.services.onnx_bundle_service.ensure_onnx_bundle_sync"
         ) as ensure:
@@ -23,7 +23,7 @@ class SetupRunTests(unittest.TestCase):
     def test_run_skips_download_for_non_onnx_backend(self) -> None:
         config = {"embedding_backend": "openai_compatible", "embedding_model": "fast"}
         with patch.object(setup_module, "_install_chromium"), patch.object(
-            setup_module, "load_research_config", return_value=config
+            setup_module, "load_tinysearch_config", return_value=config
         ), patch(
             "tinysearch.services.onnx_bundle_service.ensure_onnx_bundle_sync"
         ) as ensure:
@@ -34,7 +34,7 @@ class SetupRunTests(unittest.TestCase):
     def test_with_system_deps_passed_through(self) -> None:
         config = {"embedding_backend": "openai_compatible", "embedding_model": "fast"}
         with patch.object(setup_module, "_install_chromium") as install, patch.object(
-            setup_module, "load_research_config", return_value=config
+            setup_module, "load_tinysearch_config", return_value=config
         ):
             setup_module.run(with_system_deps=True)
 

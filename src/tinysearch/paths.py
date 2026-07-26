@@ -17,7 +17,7 @@ APP_NAME = "tinysearch"
 
 
 def native_config_path() -> Path:
-    return Path(platformdirs.user_config_dir(APP_NAME)) / "research_config.json"
+    return Path(platformdirs.user_config_dir(APP_NAME)) / "tinysearch_config.json"
 
 
 def native_models_dir() -> Path:

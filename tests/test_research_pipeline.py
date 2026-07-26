@@ -6,8 +6,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from tinysearch.pipelines.agentic_research import agentic_run
 from tinysearch import to_prompt
+from tinysearch.config import TinySearchConfig
+from tinysearch.pipelines.research import run_research_pipeline
 from tinysearch.services.web_search_service import (
     SearchBackendUnavailable,
     SearchResult,
@@ -66,15 +67,21 @@ def _answer(result) -> str:
     return to_prompt(result.to_dict(), today="2026-06-12")
 
 
-class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
+def _config(**overrides) -> TinySearchConfig:
+    return TinySearchConfig(**overrides)
+
+
+class ResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
     async def test_pipeline_returns_prompt_from_ranked_search_and_chunks(self) -> None:
-        result = await agentic_run(
+        result = await run_research_pipeline(
             "python async search",
-            search_top_k=2,
-            search_max_results_to_keep=1,
-            chunk_max_results_to_keep=1,
-            crawl_max_chunk_tokens=40,
-            crawl_overlap_tokens=0,
+            config=_config(
+                search_top_k=2,
+                search_max_results_to_keep=1,
+                chunk_max_results_to_keep=1,
+                crawl_max_chunk_tokens=40,
+                crawl_overlap_tokens=0,
+            ),
             embedder=_fake_embedder,
             search_fn=_fake_search,
             crawl_fn=_fake_crawl,
@@ -108,9 +115,9 @@ class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Bread Recipes", _answer(result))
 
     async def test_pipeline_formats_empty_results_prompt(self) -> None:
-        result = await agentic_run(
+        result = await run_research_pipeline(
             "no results",
-            search_top_k=2,
+            config=_config(search_top_k=2),
             search_fn=lambda query, limit: [],
             crawl_fn=_fake_crawl,
         )
@@ -151,14 +158,16 @@ class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
                 "tokens_raw": 10,
             }
 
-        result = await agentic_run(
+        result = await run_research_pipeline(
             "python async search",
-            search_top_k=2,
-            search_max_results_to_keep=2,
-            chunk_max_results_to_keep=1,
-            crawl_max_chunk_tokens=40,
-            crawl_overlap_tokens=0,
-            blocked_domains=["blocked.example"],
+            config=_config(
+                search_top_k=2,
+                search_max_results_to_keep=2,
+                chunk_max_results_to_keep=1,
+                crawl_max_chunk_tokens=40,
+                crawl_overlap_tokens=0,
+                blocked_domains=["blocked.example"],
+            ),
             embedder=_fake_embedder,
             search_fn=search_with_blocked_result,
             crawl_fn=recording_crawl,
@@ -170,13 +179,15 @@ class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("https://blocked.example/python", _answer(result))
 
     async def test_pipeline_ranks_chunks_in_one_global_pool(self) -> None:
-        result = await agentic_run(
+        result = await run_research_pipeline(
             "python async search",
-            search_top_k=2,
-            search_max_results_to_keep=2,
-            chunk_max_results_to_keep=1,
-            crawl_max_chunk_tokens=40,
-            crawl_overlap_tokens=0,
+            config=_config(
+                search_top_k=2,
+                search_max_results_to_keep=2,
+                chunk_max_results_to_keep=1,
+                crawl_max_chunk_tokens=40,
+                crawl_overlap_tokens=0,
+            ),
             embedder=_fake_embedder,
             search_fn=_fake_search,
             crawl_fn=_fake_crawl,
@@ -196,16 +207,19 @@ class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             return await _fake_crawl(**kwargs)
 
         with patch(
-            "tinysearch.pipelines.agentic_research.resolve_embedding_tokenizer_name",
+            "tinysearch.pipelines.research.resolve_embedding_tokenizer_name",
             return_value="embedding-tokenizer",
         ):
-            await agentic_run(
+            await run_research_pipeline(
                 "python async search",
-                search_top_k=1,
-                search_max_results_to_keep=1,
-                chunk_max_results_to_keep=1,
-                crawl_max_chunk_tokens=40,
-                crawl_overlap_tokens=0,
+                config=_config(
+                    search_top_k=1,
+                    search_max_results_to_keep=1,
+                    chunk_max_results_to_keep=1,
+                    crawl_max_chunk_tokens=40,
+                    crawl_overlap_tokens=0,
+                    encoding_name="embedding",
+                ),
                 embedder=_fake_embedder,
                 search_fn=_fake_search,
                 crawl_fn=recording_crawl,
@@ -220,17 +234,19 @@ class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             await _asyncio.sleep(10)
             return await _fake_crawl(**kwargs)
 
-        result = await agentic_run(
+        result = await run_research_pipeline(
             "python async search",
-            search_top_k=1,
-            search_max_results_to_keep=1,
-            chunk_max_results_to_keep=1,
-            crawl_max_chunk_tokens=40,
-            crawl_overlap_tokens=0,
+            config=_config(
+                search_top_k=1,
+                search_max_results_to_keep=1,
+                chunk_max_results_to_keep=1,
+                crawl_max_chunk_tokens=40,
+                crawl_overlap_tokens=0,
+                pipeline_timeout_seconds=0.1,
+            ),
             embedder=_fake_embedder,
             search_fn=_fake_search,
             crawl_fn=slow_crawl,
-            pipeline_timeout_seconds=0.1,
         )
 
         self.assertIn("QUESTION", _answer(result))
@@ -238,26 +254,28 @@ class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("RESULT 1", _answer(result))
 
     async def test_pipeline_no_timeout_when_none(self) -> None:
-        result = await agentic_run(
+        result = await run_research_pipeline(
             "python async search",
-            search_top_k=1,
-            search_max_results_to_keep=1,
-            chunk_max_results_to_keep=1,
-            crawl_max_chunk_tokens=40,
-            crawl_overlap_tokens=0,
+            config=_config(
+                search_top_k=1,
+                search_max_results_to_keep=1,
+                chunk_max_results_to_keep=1,
+                crawl_max_chunk_tokens=40,
+                crawl_overlap_tokens=0,
+                pipeline_timeout_seconds=None,
+            ),
             embedder=_fake_embedder,
             search_fn=_fake_search,
             crawl_fn=_fake_crawl,
-            pipeline_timeout_seconds=None,
         )
 
         self.assertIn("RESULT 1", _answer(result))
 
     async def test_pipeline_rejects_bm25_only_configuration(self) -> None:
         with self.assertRaises(ValueError):
-            await agentic_run(
+            await run_research_pipeline(
                 "python async search",
-                search_dense_weight=0.0,
+                config=_config(search_dense_weight=0.0),
                 embedder=_fake_embedder,
                 search_fn=_fake_search,
                 crawl_fn=_fake_crawl,
@@ -269,14 +287,16 @@ class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             trace_path = Path(tmp) / "trace.json"
-            result = await agentic_run(
+            result = await run_research_pipeline(
                 "python async search",
-                search_top_k=1,
-                search_max_results_to_keep=1,
+                config=_config(
+                    search_top_k=1,
+                    search_max_results_to_keep=1,
+                    trace_path=str(trace_path),
+                ),
                 embedder=_fake_embedder,
                 search_fn=failing_search,
                 crawl_fn=_fake_crawl,
-                trace_path=str(trace_path),
             )
 
             self.assertIn("QUESTION", _answer(result))
@@ -295,10 +315,12 @@ class AgenticResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             return await _fake_embedder(inputs)
 
         with self.assertRaises(RuntimeError):
-            await agentic_run(
+            await run_research_pipeline(
                 "python async search",
-                search_top_k=1,
-                search_max_results_to_keep=1,
+                config=_config(
+                    search_top_k=1,
+                    search_max_results_to_keep=1,
+                ),
                 embedder=failing_embedder,
                 search_fn=_fake_search,
                 crawl_fn=_fake_crawl,

@@ -142,12 +142,12 @@ def _crawler_config_for_fit_markdown(
     )
 
 
-def _url_path_suffix(url: str) -> str:
+def url_path_suffix(url: str) -> str:
     return urlparse(url).path.lower().rsplit(".", 1)[-1] if "." in urlparse(url).path else ""
 
 
-def _is_document_url(url: str) -> bool:
-    return _url_path_suffix(url) in {"pdf", "docx", "doc"}
+def is_document_url(url: str) -> bool:
+    return url_path_suffix(url) in {"pdf", "docx", "doc"}
 
 
 def _download_url_bytes(url: str) -> bytes:
@@ -194,8 +194,8 @@ def _extract_docx_text(data: bytes) -> str:
         return "\n\n".join(parts).strip()
 
 
-def _extract_document_text(url: str) -> tuple[str, str]:
-    suffix = _url_path_suffix(url)
+def extract_document_text(url: str) -> tuple[str, str]:
+    suffix = url_path_suffix(url)
     if suffix == "doc":
         raise ValueError("legacy .doc files are not supported; use PDF or DOCX")
 
@@ -386,8 +386,8 @@ async def crawl_search(
     """
     _ensure_utf8_stdio()
 
-    if _is_document_url(url):
-        markdown_raw, document_type = await asyncio.to_thread(_extract_document_text, url)
+    if is_document_url(url):
+        markdown_raw, document_type = await asyncio.to_thread(extract_document_text, url)
         chunks = chunk_text(
             text=markdown_raw,
             max_chunk_tokens=max_chunk_tokens,

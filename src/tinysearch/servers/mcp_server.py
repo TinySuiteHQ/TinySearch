@@ -13,9 +13,9 @@ from starlette.datastructures import Headers
 from starlette.routing import BaseRoute, Mount, Route
 
 from tinysearch import core
-from tinysearch.services.research_config_service import (
-    load_research_config,
-    research_tokenizer_name,
+from tinysearch.services.tinysearch_config_service import (
+    load_tinysearch_config,
+    tokenizer_name_for_config,
 )
 from tinysearch.services.scrape_service import (
     DEFAULT_SCRAPE_MAX_TOKENS,
@@ -186,7 +186,7 @@ source URL.
 
 
 def _answer_tokens(answer: str) -> int:
-    return token_count(answer, encoding_name=research_tokenizer_name())
+    return token_count(answer, encoding_name=tokenizer_name_for_config())
 
 
 def _log(message: str) -> None:
@@ -265,7 +265,7 @@ async def research(
     started = time.monotonic()
     _log(f"research called query={query!r}")
     try:
-        config = load_research_config()
+        config = load_tinysearch_config()
         result = await core.research(query, config=config)
         elapsed = time.monotonic() - started
         if output_format == "json":
@@ -329,7 +329,7 @@ async def scrape_url_tool(
     max_tokens = DEFAULT_SCRAPE_MAX_TOKENS
     _log(f"scrape_url called url={url!r} query={query!r} max_tokens={max_tokens}")
     try:
-        config = load_research_config()
+        config = load_tinysearch_config()
         result = await core.scrape_url(
             url,
             query,
@@ -368,7 +368,7 @@ async def scrape_url_tool(
 
 def main() -> None:
     _enable_traceback_dump()
-    cfg = load_research_config()
+    cfg = load_tinysearch_config()
     asyncio.run(core._ensure_local_bundle_for_config(cfg))
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:

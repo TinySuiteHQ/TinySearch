@@ -8,10 +8,10 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, HttpUrl
 
 from tinysearch import core
-from tinysearch.services.research_config_service import (
-    load_research_config,
-    research_tokenizer_name,
-    save_research_config,
+from tinysearch.services.tinysearch_config_service import (
+    load_tinysearch_config,
+    save_tinysearch_config,
+    tokenizer_name_for_config,
 )
 from tinysearch.services.scrape_service import (
     SCRAPE_ERROR_MAP,
@@ -26,7 +26,7 @@ def _tinysearch_version() -> str:
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
-    cfg = load_research_config()
+    cfg = load_tinysearch_config()
     await core._ensure_local_bundle_for_config(cfg)
     yield
 
@@ -62,7 +62,7 @@ async def current_datetime_endpoint() -> dict[str, str]:
 
 @app.get("/config")
 async def get_config_endpoint() -> dict[str, Any]:
-    config = load_research_config()
+    config = load_tinysearch_config()
     return {
         key: ("***" if any(marker in key.lower() for marker in ("secret", "token", "api_key")) else value)
         for key, value in config.items()
@@ -95,7 +95,7 @@ async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
             },
         )
     try:
-        return save_research_config(payload)
+        return save_tinysearch_config(payload)
     except ValueError as exc:
         raise HTTPException(
             status_code=400,
@@ -123,7 +123,7 @@ async def scrape_endpoint(request: ScrapeRequest) -> dict[str, Any]:
         result = await core.scrape_url(
             str(request.url),
             request.query,
-            config=load_research_config(),
+            config=load_tinysearch_config(),
         )
     except (InvalidUrlError, BlockedUrlError, ScrapeError) as exc:
         _raise_scrape_http_error(exc)
@@ -134,13 +134,13 @@ async def scrape_endpoint(request: ScrapeRequest) -> dict[str, Any]:
 
     prompt = to_prompt(result)
     source = result["sources"][0]
-    config = load_research_config()
+    config = load_tinysearch_config()
     return {
         "answer": prompt,
         "url": source["url"],
         "title": source["title"],
         "content_tokens": result["stats"]["content_tokens"],
-        "answer_tokens": token_count(prompt, research_tokenizer_name(config)),
+        "answer_tokens": token_count(prompt, tokenizer_name_for_config(config)),
         "truncated": result["stats"]["truncated"],
         "retrieved_at": result["retrieved_at"],
     }
@@ -148,7 +148,7 @@ async def scrape_endpoint(request: ScrapeRequest) -> dict[str, Any]:
 
 @app.post("/research")
 async def research_endpoint(request: ResearchRequest) -> dict[str, Any]:
-    result = await core.research(request.query, config=load_research_config())
+    result = await core.research(request.query, config=load_tinysearch_config())
     if request.output_format == "json":
         return result
     from tinysearch.prompts import to_prompt

@@ -1,4 +1,4 @@
-"""Public, dependency-free TinySearch research configuration."""
+"""Public, dependency-free TinySearch configuration."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from tinysearch.services.embedding_service import (
     DEFAULT_EMBEDDING_BACKEND,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_EMBEDDING_OPENAI_ENV_FILE,
+    SUPPORTED_EMBEDDING_BACKENDS,
+    normalize_embedding_backend,
 )
 from tinysearch.services.web_search_service import (
     ALLOWED_SEARCH_BACKENDS,
@@ -96,7 +98,13 @@ _FLOAT_FIELDS = {
 def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Merge a partial mapping onto canonical defaults and validate it."""
     config = dict(DEFAULT_CONFIG)
-    config.update(dict(raw or {}))
+    config.update(
+        {
+            key: value
+            for key, value in dict(raw or {}).items()
+            if not str(key).startswith("_comment")
+        }
+    )
     for legacy in ("embedding_gguf_file", "mcp_transport"):
         config.pop(legacy, None)
     for key in _INT_FIELDS:
@@ -109,7 +117,6 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     )
     for key in (
         "encoding_name",
-        "embedding_backend",
         "embedding_model",
         "embedding_openai_env_file",
         "dense_query_prefix",
@@ -122,9 +129,19 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         if config.get(key) is not None:
             config[key] = str(config[key])
 
+    embedding_backend = normalize_embedding_backend(
+        str(config.get("embedding_backend") or DEFAULT_EMBEDDING_BACKEND)
+    )
+    if embedding_backend not in SUPPORTED_EMBEDDING_BACKENDS:
+        raise ValueError(
+            "tinysearch config embedding_backend must be one of "
+            f"{list(SUPPORTED_EMBEDDING_BACKENDS)}"
+        )
+    config["embedding_backend"] = embedding_backend
+
     blocked_domains = config.get("blocked_domains", [])
     if not isinstance(blocked_domains, list):
-        raise ValueError("research config blocked_domains must be a JSON list")
+        raise ValueError("tinysearch config blocked_domains must be a JSON list")
     config["blocked_domains"] = list(
         dict.fromkeys(
             normalized
@@ -138,7 +155,7 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     backend = str(config.get("search_backend") or "ddgs").strip().lower()
     if backend not in ALLOWED_SEARCH_BACKENDS:
         raise ValueError(
-            "research config search_backend must be one of "
+            "tinysearch config search_backend must be one of "
             f"{sorted(ALLOWED_SEARCH_BACKENDS)}"
         )
     config["search_backend"] = backend
@@ -157,7 +174,7 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         ]
     else:
         raise ValueError(
-            "research config search_engines must be a list or comma-separated string"
+            "tinysearch config search_engines must be a list or comma-separated string"
         )
     config["search_engines"] = engines_list
     config["search_region"] = str(
@@ -190,7 +207,7 @@ class TinySearchConfig(Mapping[str, Any]):
         config_path = Path(path)
         raw = json.loads(config_path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
-            raise ValueError(f"research config must be a JSON object: {config_path}")
+            raise ValueError(f"tinysearch config must be a JSON object: {config_path}")
         return cls.from_mapping(raw)
 
     def to_dict(self) -> dict[str, Any]:

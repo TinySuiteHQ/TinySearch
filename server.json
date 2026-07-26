@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.MarcellM01/tinysearch",
   "description": "Self-hosted web research for MCP agents.",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "websiteUrl": "https://github.com/MarcellM01/TinySearch",
   "repository": {
     "url": "https://github.com/MarcellM01/TinySearch",
@@ -12,7 +12,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "docker.io/marcellm01/tinysearch:v0.3.2",
+      "identifier": "docker.io/marcellm01/tinysearch:v0.4.0",
       "transport": {
         "type": "stdio"
       },
@@ -25,7 +25,7 @@
         },
         {
           "name": "TINYSEARCH_CONFIG_PATH",
-          "description": "Path to a research_config.json inside the container, for overriding search/embedding defaults.",
+          "description": "Path to a tinysearch_config.json inside the container, for overriding search/embedding defaults.",
           "isRequired": false,
           "isSecret": false
         },
@@ -34,8 +34,28 @@
           "description": "SearXNG search endpoint URL. Only needed if not using the bundled Compose SearXNG service.",
           "isRequired": false,
           "isSecret": false
+        },
+        {
+          "name": "TINYSEARCH_EMBEDDING_BACKEND",
+          "description": "Embedding implementation: onnx (default) or openai_compatible.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "TINYSEARCH_EMBEDDING_MODEL",
+          "description": "Local ONNX preset (fast, balanced, quality) or a Hugging Face ONNX repository id.",
+          "isRequired": false,
+          "isSecret": false
         }
       ]
+    },
+    {
+      "registryType": "pypi",
+      "identifier": "tinysuite-tinysearch",
+      "version": "0.4.0",
+      "transport": {
+        "type": "stdio"
+      }
     }
   ]
 }

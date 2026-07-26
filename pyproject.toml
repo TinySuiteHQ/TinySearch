@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,9 +7,16 @@ name = "tinysuite-tinysearch"
 version = "0.4.0"
 description = "Local web retrieval with ranked, source-grounded evidence."
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
-license = { file = "LICENSE" }
+requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "MarcellM01" }]
+classifiers = [
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
 
 dependencies = [
     "crawl4ai==0.9.0",

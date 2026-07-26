@@ -10,11 +10,8 @@ from tinysearch.servers.fastapi_server import (
     research_endpoint,
 )
 from tinysearch.servers.mcp_server import _mcp_cors_origins, research as mcp_research
-from tinysearch.services.research_config_service import (
-    DEFAULT_RESEARCH_CONFIG,
-    config_trace_path,
-    normalize_research_query,
-    research_run_kwargs,
+from tinysearch.services.tinysearch_config_service import (
+    normalize_query,
 )
 from tinysearch.results import result_envelope
 
@@ -78,9 +75,9 @@ class ServerRuntimeMetadataTests(unittest.TestCase):
             self.assertEqual(_tinysearch_version(), "dev")
 
     def test_query_normalization_is_shared(self) -> None:
-        self.assertEqual(normalize_research_query("  hello  "), "hello")
+        self.assertEqual(normalize_query("  hello  "), "hello")
         with self.assertRaisesRegex(ValueError, "query must not be empty"):
-            normalize_research_query("  ")
+            normalize_query("  ")
 
 
 class McpCorsConfigTests(unittest.TestCase):

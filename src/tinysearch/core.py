@@ -14,18 +14,13 @@ from functools import partial
 from typing import Any
 
 from tinysearch.config import ConfigInput, resolve_config
-from tinysearch.pipelines.agentic_research import agentic_run
+from tinysearch.pipelines.research import run_research_pipeline
+from tinysearch.pipelines.scrape import run_scrape_pipeline
 from tinysearch.results import public_chunk, result_envelope
 from tinysearch.services.current_datetime_service import current_datetime_payload
 from tinysearch.services.embedding_service import normalize_embedding_backend
-from tinysearch.services.research_config_service import (
-    config_trace_path,
-    normalize_research_query,
-    research_run_kwargs,
-    research_tokenizer_name,
-)
 from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
-from tinysearch.services.scrape_service import scrape_url as _scrape_url_service
+from tinysearch.services.tinysearch_config_service import normalize_query
 from tinysearch.services.web_search_service import search
 
 get_current_datetime = current_datetime_payload
@@ -52,20 +47,19 @@ async def _ensure_local_bundle_for_config(config: dict[str, Any]) -> None:
 
 
 async def research(query: str, *, config: ConfigInput | None = None) -> dict[str, Any]:
-    """Discover relevant URLs, crawl and rank them, and return a grounded answer prompt.
+    """Discover relevant URLs, crawl and rank them, and return structured evidence.
 
     `config`, if given, overrides the on-disk/env-driven config for this call
     only (see `_resolve_config`) — pass a dict instead of pointing
     `TINYSEARCH_CONFIG_PATH` at a file when calling this as a library.
     """
-    query = normalize_research_query(query)
+    query = normalize_query(query)
     resolved_config = _resolve_config(config)
     await _ensure_local_bundle_for_config(resolved_config)
-    result = await agentic_run(
+    result = await run_research_pipeline(
         query,
-        trace_path=config_trace_path(resolved_config),
+        config=resolved_config,
         search_fn=partial(search, config=resolved_config),
-        **research_run_kwargs(resolved_config),
     )
     return result.to_dict()
 
@@ -77,21 +71,19 @@ async def scrape_url(
     max_tokens: int = DEFAULT_SCRAPE_MAX_TOKENS,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
-    """Crawl a specific URL and return a grounded answer prompt ranked against query.
+    """Crawl a specific URL and return structured evidence ranked against the query.
 
     `config`, if given, overrides the on-disk/env-driven config for this call
     only (see `_resolve_config`).
     """
     config = _resolve_config(config)
     await _ensure_local_bundle_for_config(config)
-    tokenizer = research_tokenizer_name(config)
-    scrape_result = await _scrape_url_service(
+    scrape_result = await run_scrape_pipeline(
         url,
         query,
         max_tokens=max_tokens,
         include_metadata=True,
         config=config,
-        tokenizer_name=tokenizer,
     )
     source = {
         "id": "1",

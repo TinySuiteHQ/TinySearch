@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 import tinysearch
 from tinysearch.config import DEFAULT_CONFIG, TinySearchConfig
 from tinysearch.core import _ensure_local_bundle_for_config
-from tinysearch.pipelines.agentic_research import AgenticResult
+from tinysearch.pipelines.research import ResearchResult
 from tinysearch.results import result_envelope
 
 
@@ -28,8 +28,8 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(TinySearchConfig()["search_backend"], "ddgs")
 
     async def test_research_returns_json_serializable_schema_v1_result(self) -> None:
-        run = AsyncMock(return_value=AgenticResult(_research_payload()))
-        with patch("tinysearch.core.agentic_run", new=run), patch(
+        run = AsyncMock(return_value=ResearchResult(_research_payload()))
+        with patch("tinysearch.core.run_research_pipeline", new=run), patch(
             "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
         ):
             result = await tinysearch.research("  hello  ")
@@ -41,8 +41,8 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(run.await_args.args[0], "hello")
 
     async def test_research_explicit_config_controls_bound_search(self) -> None:
-        run = AsyncMock(return_value=AgenticResult(_research_payload()))
-        with patch("tinysearch.core.agentic_run", new=run), patch(
+        run = AsyncMock(return_value=ResearchResult(_research_payload()))
+        with patch("tinysearch.core.run_research_pipeline", new=run), patch(
             "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
         ):
             await tinysearch.research(
@@ -50,19 +50,19 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
                 config={"search_backend": "searxng", "search_top_k": 3},
             )
 
-        self.assertEqual(run.await_args.kwargs["search_top_k"], 3)
+        self.assertEqual(run.await_args.kwargs["config"]["search_top_k"], 3)
         bound_search = run.await_args.kwargs["search_fn"]
         self.assertEqual(bound_search.keywords["config"]["search_backend"], "searxng")
 
-    async def test_research_config_dict_is_merged_onto_defaults(self) -> None:
-        run = AsyncMock(return_value=AgenticResult(_research_payload()))
-        with patch("tinysearch.core.agentic_run", new=run), patch(
+    async def test_research_explicit_config_is_merged_onto_defaults(self) -> None:
+        run = AsyncMock(return_value=ResearchResult(_research_payload()))
+        with patch("tinysearch.core.run_research_pipeline", new=run), patch(
             "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
         ):
             await tinysearch.research("hello", config={"search_region": "uk-en"})
 
         self.assertEqual(
-            run.await_args.kwargs["search_top_k"],
+            run.await_args.kwargs["config"]["search_top_k"],
             DEFAULT_CONFIG["search_top_k"],
         )
 
@@ -85,7 +85,7 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
             metadata={"author": "A"},
         )
         with patch(
-            "tinysearch.core._scrape_url_service",
+            "tinysearch.core.run_scrape_pipeline",
             new=AsyncMock(return_value=scrape_result),
         ), patch("tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()):
             result = await tinysearch.scrape_url("https://example.com/x", "q")

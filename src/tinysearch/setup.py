@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 from tinysearch.services.embedding_service import normalize_embedding_backend
-from tinysearch.services.research_config_service import load_research_config
+from tinysearch.services.tinysearch_config_service import load_tinysearch_config
 
 
 def _log(message: str) -> None:
@@ -36,7 +36,7 @@ def _install_chromium(with_system_deps: bool) -> None:
 def run(with_system_deps: bool = False) -> int:
     _install_chromium(with_system_deps)
 
-    config = load_research_config()
+    config = load_tinysearch_config()
     if normalize_embedding_backend(str(config["embedding_backend"])) == "onnx":
         from tinysearch.services.onnx_bundle_service import ensure_onnx_bundle_sync
 

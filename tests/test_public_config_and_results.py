@@ -10,7 +10,7 @@ from unittest.mock import patch
 from tinysearch import TinySearchConfig, to_prompt
 from tinysearch.config import resolve_config
 from tinysearch.results import result_envelope
-from tinysearch.services.research_config_service import load_research_config
+from tinysearch.services.tinysearch_config_service import load_tinysearch_config
 
 
 class PublicConfigTests(unittest.TestCase):
@@ -56,9 +56,41 @@ class PublicConfigTests(unittest.TestCase):
             },
             clear=True,
         ):
-            config = load_research_config()
+            config = load_tinysearch_config()
         self.assertEqual(config["search_backend"], "searxng")
         self.assertEqual(config["search_backend_url"], "http://example.test/search")
+
+    def test_comment_fields_are_ignored(self) -> None:
+        config = TinySearchConfig.from_mapping(
+            {
+                "_comment_embedding_model": "Choose a local model.",
+                "embedding_model": "balanced",
+            }
+        )
+        self.assertEqual(config.embedding_model, "balanced")
+        self.assertNotIn("_comment_embedding_model", config)
+
+    def test_embedding_backend_is_normalized_and_validated(self) -> None:
+        self.assertEqual(
+            TinySearchConfig(embedding_backend="openai").embedding_backend,
+            "openai_compatible",
+        )
+        with self.assertRaisesRegex(ValueError, "embedding_backend"):
+            TinySearchConfig(embedding_backend="unknown")
+
+    def test_server_loader_applies_embedding_environment_overrides(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "TINYSEARCH_CONFIG_PATH": "/does/not/exist.json",
+                "TINYSEARCH_EMBEDDING_BACKEND": "onnx",
+                "TINYSEARCH_EMBEDDING_MODEL": "quality",
+            },
+            clear=True,
+        ):
+            config = load_tinysearch_config()
+        self.assertEqual(config["embedding_backend"], "onnx")
+        self.assertEqual(config["embedding_model"], "quality")
 
 
 class PublicResultTests(unittest.TestCase):

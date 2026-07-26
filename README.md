@@ -1,5 +1,7 @@
 # TinySearch
 
+<!-- mcp-name: io.github.MarcellM01/tinysearch -->
+
 <p align="center">
   <a href="https://tinysuite.dev">
     <img src="assets/tinysearch-full-logo.png" alt="TinySearch" width="240" />
@@ -32,6 +34,7 @@ Just search -> crawl -> rerank -> structured evidence.
 ## Contents
 
 - [Why people use it](#why-people-use-it)
+- [Choose a tier](#choose-a-tier)
 - [Python library](#python-library)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
@@ -55,12 +58,24 @@ Just search -> crawl -> rerank -> structured evidence.
 - Keep source URLs attached to the evidence your model sees.
 - Avoid dumping full webpages into context.
 - Run with local ONNX embeddings by default, or bring an OpenAI-compatible embedding API.
-- Use SearXNG by default, with a DuckDuckGo HTML fallback when configured.
+- Use DDGS with no search service, or add the bundled SearXNG deployment.
 - Keep the stack small enough to run locally in Docker.
 
 TinySearch is built for local agents, prototypes, personal workflows, and small
 systems where source-grounded web research matters more than running a full
 search product.
+
+## Choose a tier
+
+| Tier | Use it when | Entry point | Search backend |
+| --- | --- | --- | --- |
+| 1. Python library | You are building with TinySuite or Python | `pip install tinysuite-tinysearch` | DDGS |
+| 2. One-command MCP | An MCP client should launch TinySearch for you | `uvx --from "tinysuite-tinysearch[server]" tinysearch` | DDGS |
+| 3. Docker + SearXNG | You want the full self-hosted stack and HTTP MCP | `docker compose ... up -d` | Bundled SearXNG |
+
+Tiers 1 and 2 need no search service. Tier 3 adds a dedicated SearXNG service,
+persistent model storage, and a network MCP endpoint. Detailed setup follows in
+the sections below.
 
 ## Python library
 
@@ -79,7 +94,11 @@ from tinysearch import TinySearchConfig, research, to_prompt
 async def main():
     result = await research(
         "How does asyncio cancellation work?",
-        config=TinySearchConfig(search_top_k=10),
+        config=TinySearchConfig(
+            search_top_k=10,
+            embedding_backend="onnx",
+            embedding_model="balanced",
+        ),
     )
     print(result["sources"])
 
@@ -105,39 +124,54 @@ result = await research(query)
 prompt = to_prompt(result)
 ```
 
-Install the optional MCP and HTTP transports with:
-
-```bash
-pip install "tinysuite-tinysearch[server]"
-```
-
 ## Quick start
 
-Run TinySearch with its own SearXNG instance as an MCP server over Streamable
-HTTP. Docker Compose loads the configuration directly from GitHub, so you do
-not need to clone the repository or create any configuration files:
+If you have [`uv`](https://docs.astral.sh/uv/), an MCP client can run the PyPI
+package directly. No clone, virtual environment, Docker, or SearXNG is needed:
 
 ```bash
-docker compose -f "https://github.com/MarcellM01/TinySearch.git#main:compose.quickstart.yaml" up -d
+uvx --from "tinysuite-tinysearch[server]" tinysearch
 ```
 
-Then connect your MCP client to:
+The command starts a stdio MCP server. Put the same command in your MCP client:
 
 ```json
 {
   "mcpServers": {
     "tinysearch": {
-      "url": "http://localhost:8000/mcp"
+      "command": "uvx",
+      "args": [
+        "--from",
+        "tinysuite-tinysearch[server]",
+        "tinysearch"
+      ]
     }
   }
 }
 ```
 
-Stop and remove the containers later with:
+TinySearch downloads the selected local embedding model on first start. Install
+Chromium once before the first crawl:
 
 ```bash
-docker compose -f "https://github.com/MarcellM01/TinySearch.git#main:compose.quickstart.yaml" down
+uvx --from "tinysuite-tinysearch[server]" tinysearch setup
 ```
+
+Use `tinysearch_config.json` via `TINYSEARCH_CONFIG_PATH` for full
+configuration, or select a local embedding preset directly in the MCP client's
+environment:
+
+```json
+{
+  "env": {
+    "TINYSEARCH_EMBEDDING_BACKEND": "onnx",
+    "TINYSEARCH_EMBEDDING_MODEL": "balanced"
+  }
+}
+```
+
+Supported backends are `onnx` (local, default) and `openai_compatible`.
+Supported local presets are `fast` (default), `balanced`, and `quality`.
 
 TinySearch exposes three MCP tools:
 
@@ -163,7 +197,7 @@ The tools return a grounded prompt in the `answer` field by default. Pass
 flowchart TB
     subgraph Row1["Search and choose pages"]
         direction LR
-        A[User query] --> B[Web search<br/>SearXNG default, DuckDuckGo fallback]
+        A[User query] --> B[Web search<br/>DDGS or SearXNG]
         B --> C[Filter HTTP results<br/>build title URL domain snippet docs]
         C --> D[Rank search docs<br/>dense + BM25 weighted RRF]
     end
@@ -182,6 +216,11 @@ flowchart TB
 TinySearch does not directly answer the question. The core returns structured
 evidence; MCP renders that evidence into the **`answer` field** by default, and
 your **client model** produces the final **cited response**.
+
+`scrape_url` runs the single-URL version of the retrieval pipeline: validate
+the URL, extract readable content, chunk it, hybrid-rank the chunks with dense
+embeddings and BM25, and fit the selected evidence to the requested token
+budget. It skips only web discovery and search-result ranking.
 
 <p align="center">
   <img src="assets/demo_terminal_prompt.gif" alt="TinySearch terminal demo showing a source-grounded research prompt" width="780" />
@@ -243,13 +282,38 @@ actually needed.
 The server uses **stdio** by default, which is what Cursor and similar clients
 expect when they spawn `python .../mcp_server.py`. To run with `sse` or
 `streamable-http`, set `MCP_TRANSPORT` when starting the process. Do not put
-transport in `configs/research_config.json`.
+transport in `configs/tinysearch_config.json`.
 
 ## Docker
 
-The [quick start](#quick-start) command runs TinySearch over Streamable HTTP on
-`http://localhost:8000/mcp`. Docker pulls `marcellm01/tinysearch:latest`
-automatically if the image is not already local.
+The full deployment runs TinySearch with its own SearXNG instance over
+Streamable HTTP. It loads the Compose file directly from GitHub, so no clone or
+local configuration file is needed:
+
+```bash
+docker compose -f "https://github.com/MarcellM01/TinySearch.git#main:compose.quickstart.yaml" up -d
+```
+
+Connect the MCP client to `http://localhost:8000/mcp`:
+
+```json
+{
+  "mcpServers": {
+    "tinysearch": {
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+Stop the stack with:
+
+```bash
+docker compose -f "https://github.com/MarcellM01/TinySearch.git#main:compose.quickstart.yaml" down
+```
+
+Docker pulls `marcellm01/tinysearch:latest` automatically if the image is not
+already local.
 
 With `MCP_TRANSPORT=streamable-http`, the image serves Streamable HTTP on
 `/mcp` and SSE on `/mcp/sse`. GET requests to `/mcp` without an
@@ -274,8 +338,8 @@ from search results:
 docker run --rm \
   -p 8000:8000 \
   -v tinysearch-models:/data/models \
-  -v "$PWD/configs/research_config.json:/config/research_config.json:ro" \
-  -e TINYSEARCH_CONFIG_PATH=/config/research_config.json \
+  -v "$PWD/configs/tinysearch_config.json:/config/tinysearch_config.json:ro" \
+  -e TINYSEARCH_CONFIG_PATH=/config/tinysearch_config.json \
   -e MCP_TRANSPORT=streamable-http \
   -e MCP_HOST=0.0.0.0 \
   marcellm01/tinysearch:latest
@@ -305,9 +369,9 @@ absolute path:
         "-v",
         "tinysearch-models:/data/models",
         "-v",
-        "/absolute/path/to/TinySearch/configs/research_config.json:/config/research_config.json:ro",
+        "/absolute/path/to/TinySearch/configs/tinysearch_config.json:/config/tinysearch_config.json:ro",
         "-e",
-        "TINYSEARCH_CONFIG_PATH=/config/research_config.json",
+        "TINYSEARCH_CONFIG_PATH=/config/tinysearch_config.json",
         "-e",
         "TINYSEARCH_MODELS_DIR=/data/models",
         "marcellm01/tinysearch:latest"
@@ -317,7 +381,7 @@ absolute path:
 }
 ```
 
-Edit `configs/research_config.json` to choose `embedding_model` (`fast`,
+Edit `configs/tinysearch_config.json` to choose `embedding_model` (`fast`,
 `balanced`, `quality`, or a custom Hugging Face ONNX repo id). The named Docker
 volume keeps downloaded model bundles between launches.
 
@@ -371,17 +435,42 @@ configuration objects or dictionaries. Server processes additionally support
 server/deployment overrides. Precedence is CLI/runtime overrides, environment,
 the explicit server config file, then core defaults.
 
-`configs/research_config.json` is the partial SearXNG Compose profile, not a
-package default.
+[`configs/tinysearch_config.json`](configs/tinysearch_config.json) is the full
+annotated configuration reference and the profile loaded by `compose.yaml`.
+Every supported setting is present. Its `_comment_*` entries explain what each
+setting controls, when to change it, and why; TinySearch ignores those entries
+when loading the file. The Python and one-command MCP paths still use package
+defaults unless you explicitly pass or load this file.
 
 Set `blocked_domains` to a JSON list of domains you do not want TinySearch to
 return or crawl. Entries match the domain and its subdomains, so `example.com`
 also blocks `www.example.com` and `news.example.com`. URL-style entries such as
 `https://example.com/path` are accepted and normalized to their hostname.
 
-The `onnx` embedding backend uses local ONNX bundles under `models/`. Starting
-the MCP server or FastAPI app downloads the configured `embedding_model` once
-from Hugging Face when `embedding_backend` is `onnx`.
+Choose the embedding implementation with `embedding_backend` and the model
+within that implementation with `embedding_model`. The `onnx` backend uses
+local ONNX bundles under `models/`. Starting the MCP server or FastAPI app
+downloads the configured `embedding_model` once from Hugging Face. The server
+also accepts `TINYSEARCH_EMBEDDING_BACKEND` and
+`TINYSEARCH_EMBEDDING_MODEL` as deployment overrides.
+
+Local example:
+
+```json
+{
+  "embedding_backend": "onnx",
+  "embedding_model": "balanced"
+}
+```
+
+OpenAI-compatible example:
+
+```json
+{
+  "embedding_backend": "openai_compatible",
+  "embedding_openai_env_file": ".env"
+}
+```
 
 Built-in local presets:
 
@@ -494,7 +583,7 @@ restart it.
 
 - `SEARXNG_URL`: overrides `search_backend_url` for the running process. Useful
   in Docker so the same image can point at different SearXNG endpoints without
-  rebuilding `research_config.json`.
+  rebuilding `tinysearch_config.json`.
 
 ### Compose setup
 
@@ -514,8 +603,8 @@ A minimal `searxng/settings.yml` is committed at the repo root. Override
 
 The Python library and standalone image use the canonical
 `search_backend: "ddgs"` default with no SearXNG involvement. A checkout no
-longer changes defaults merely because `configs/research_config.json` exists.
-The bundled Compose setup explicitly loads that partial profile to select
+longer changes defaults merely because `configs/tinysearch_config.json` exists.
+The bundled Compose setup explicitly loads the annotated profile to select
 SearXNG and its tuned retrieval limits.
 
 To force DuckDuckGo-only behavior with no SearXNG involvement, set:
@@ -565,6 +654,12 @@ Run the unittest suite:
 ```bash
 python -m unittest discover tests
 ```
+
+TinySearch supports Python 3.12 and newer. CI runs the full server suite and
+an MCP stdio handshake on Python 3.12, 3.13, and 3.14 across Linux, macOS, and
+Windows. It also builds and installs the wheel in a fresh environment. A live
+DDGS check is available as an opt-in input on the manually dispatched CI
+workflow, so normal pull requests stay deterministic.
 
 ## Contact
 

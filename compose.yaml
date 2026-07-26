@@ -13,7 +13,7 @@ services:
       - ./configs:/config:ro
     environment:
       TINYSEARCH_MODELS_DIR: /data/models
-      TINYSEARCH_CONFIG_PATH: /config/research_config.json
+      TINYSEARCH_CONFIG_PATH: /config/tinysearch_config.json
       MCP_TRANSPORT: streamable-http
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
@@ -46,7 +46,7 @@ services:
       - ./configs:/config
     environment:
       TINYSEARCH_MODELS_DIR: /data/models
-      TINYSEARCH_CONFIG_PATH: /config/research_config.json
+      TINYSEARCH_CONFIG_PATH: /config/tinysearch_config.json
       SEARXNG_URL: http://searxng:8080/search
     depends_on:
       - searxng

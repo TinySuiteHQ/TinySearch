@@ -19,12 +19,12 @@ from tinysearch.services.embedding_service import (
     resolve_local_embedding_model_spec,
 )
 from tinysearch.services.onnx_bundle_service import ensure_onnx_bundle_sync
-from tinysearch.services.research_config_service import load_research_config, research_tokenizer_name
+from tinysearch.services.tinysearch_config_service import load_tinysearch_config, tokenizer_name_for_config
 
 
 class EmbeddingModelSelectionTests(unittest.TestCase):
     def test_default_config_uses_fast_embedding_model(self) -> None:
-        cfg = load_research_config()
+        cfg = load_tinysearch_config()
 
         self.assertEqual(cfg["embedding_model"], "fast")
 
@@ -83,20 +83,20 @@ class EmbeddingModelSelectionTests(unittest.TestCase):
 
     def test_config_path_env_loads_mounted_config(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            config_path = Path(td) / "research_config.json"
+            config_path = Path(td) / "tinysearch_config.json"
             config_path.write_text(
                 '{"embedding_backend": "onnx", "embedding_model": "balanced"}',
                 encoding="utf-8",
             )
             with patch.dict(os.environ, {"TINYSEARCH_CONFIG_PATH": str(config_path)}):
-                cfg = load_research_config()
+                cfg = load_tinysearch_config()
 
         self.assertEqual(cfg["embedding_model"], "balanced")
         self.assertEqual(cfg["embedding_backend"], "onnx")
 
     def test_config_path_env_loads_blocked_domains(self) -> None:
         with tempfile.TemporaryDirectory() as td:
-            config_path = Path(td) / "research_config.json"
+            config_path = Path(td) / "tinysearch_config.json"
             config_path.write_text(
                 json.dumps(
                     {
@@ -113,7 +113,7 @@ class EmbeddingModelSelectionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             with patch.dict(os.environ, {"TINYSEARCH_CONFIG_PATH": str(config_path)}):
-                cfg = load_research_config()
+                cfg = load_tinysearch_config()
 
         self.assertEqual(
             cfg["blocked_domains"],
@@ -129,7 +129,7 @@ class EmbeddingModelSelectionTests(unittest.TestCase):
         }
 
         self.assertEqual(
-            Path(research_tokenizer_name(cfg)).name,
+            Path(tokenizer_name_for_config(cfg)).name,
             "bge-small-en-v1.5-onnx",
         )
 
@@ -141,7 +141,7 @@ class EmbeddingModelSelectionTests(unittest.TestCase):
             "embedding_openai_env_file": ".env",
         }
 
-        self.assertEqual(research_tokenizer_name(cfg), "o200k_base")
+        self.assertEqual(tokenizer_name_for_config(cfg), "o200k_base")
 
     def test_legacy_default_backend_aliases_to_onnx(self) -> None:
         self.assertEqual(normalize_embedding_backend("default"), "onnx")

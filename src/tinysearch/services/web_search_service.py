@@ -395,10 +395,10 @@ def _searxng_search(
 
 
 def _load_search_config() -> dict[str, Any]:
-    # Lazy import to avoid a circular dependency with research_config_service.
-    from tinysearch.services.research_config_service import load_research_config
+    # Lazy import to avoid a circular dependency with tinysearch_config_service.
+    from tinysearch.services.tinysearch_config_service import load_tinysearch_config
 
-    return load_research_config()
+    return load_tinysearch_config()
 
 
 def _dispatch_search(

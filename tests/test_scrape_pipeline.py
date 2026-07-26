@@ -5,6 +5,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 from tinysearch import to_prompt
+from tinysearch.pipelines.scrape import run_scrape_pipeline
 from tinysearch.results import public_chunk, result_envelope
 from tinysearch.services.scrape_service import (
     DEFAULT_SCRAPE_MAX_TOKENS,
@@ -14,13 +15,25 @@ from tinysearch.services.scrape_service import (
     SCRAPE_ERROR_MAP,
     ScrapeResult,
     UnsupportedDocumentError,
-    scrape_url,
 )
 from tinysearch.services.token_counter_service import token_count
 from tinysearch.services.url_safety_service import BlockedUrlError, InvalidUrlError
 
 
 TOKENIZER = "o200k_base"
+
+
+async def _fake_embedder(inputs: list[str]) -> list[list[float]]:
+    return [
+        [1.0, 0.0] if "async" in text.lower() else [0.0, 1.0]
+        for text in inputs
+    ]
+
+
+async def scrape_url(*args, **kwargs) -> ScrapeResult:
+    kwargs.pop("tokenizer_name", None)
+    kwargs.setdefault("embedder", _fake_embedder)
+    return await run_scrape_pipeline(*args, **kwargs)
 
 
 def _answer(result: ScrapeResult) -> str:
@@ -126,9 +139,33 @@ def _fake_document_doc(url: str) -> tuple[str, str]:
 
 
 class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_hybrid_embedding_ranking(self) -> None:
+        embedded_inputs: list[str] = []
+
+        async def recording_embedder(inputs: list[str]) -> list[list[float]]:
+            embedded_inputs.extend(inputs)
+            return await _fake_embedder(inputs)
+
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(),
+                embedder=recording_embedder,
+                crawl_fn=_fake_html_page,
+            )
+
+        self.assertGreaterEqual(len(embedded_inputs), 2)
+        self.assertIn("dense_score", result.chunks[0])
+        self.assertIn("bm25_score", result.chunks[0])
+        self.assertIn("rrf_score", result.chunks[0])
+
     async def test_returns_grounded_prompt_and_token_counts(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/article",
@@ -152,7 +189,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_metadata_populated_when_include_metadata_true(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/article",
@@ -168,7 +205,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_metadata_omitted_when_include_metadata_false(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/article",
@@ -193,7 +230,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
             }
 
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/x",
@@ -209,7 +246,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_retrieved_at_is_utc_iso_with_z_suffix(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/x",
@@ -225,7 +262,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_preserves_original_query_wording(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/x",
@@ -242,7 +279,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
 class ScrapeUrlBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_truncates_when_total_exceeds_max_tokens(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/x",
@@ -259,7 +296,7 @@ class ScrapeUrlBudgetTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_truncation_when_budget_covers_all_chunks(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/x",
@@ -285,7 +322,7 @@ class ScrapeUrlBudgetTests(unittest.IsolatedAsyncioTestCase):
             }
 
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/x",
@@ -313,7 +350,7 @@ class ScrapeUrlValidationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_url_propagates(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable",
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
             side_effect=InvalidUrlError("bad"),
         ):
             with self.assertRaises(InvalidUrlError):
@@ -327,7 +364,7 @@ class ScrapeUrlValidationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_blocked_url_propagates(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable",
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
             side_effect=BlockedUrlError("nope"),
         ):
             with self.assertRaises(BlockedUrlError):
@@ -349,7 +386,7 @@ class ScrapeUrlValidationTests(unittest.IsolatedAsyncioTestCase):
             raise BlockedUrlError("redirect blocked")
 
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_safe
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_safe
         ):
             with self.assertRaises(BlockedUrlError):
                 await scrape_url(
@@ -364,7 +401,7 @@ class ScrapeUrlValidationTests(unittest.IsolatedAsyncioTestCase):
 class ScrapeUrlErrorMappingTests(unittest.IsolatedAsyncioTestCase):
     async def test_empty_markdown_raises_empty_content(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             with self.assertRaises(EmptyContentError):
                 await scrape_url(
@@ -382,7 +419,7 @@ class ScrapeUrlErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             raise asyncio.TimeoutError("slow")
 
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             with self.assertRaises(FetchTimeoutError):
                 await scrape_url(
@@ -398,7 +435,7 @@ class ScrapeUrlErrorMappingTests(unittest.IsolatedAsyncioTestCase):
             raise RuntimeError("crawler died")
 
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             with self.assertRaises(FetchFailedError):
                 await scrape_url(
@@ -411,7 +448,7 @@ class ScrapeUrlErrorMappingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_legacy_doc_raises_unsupported_document(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             with self.assertRaises(UnsupportedDocumentError):
                 await scrape_url(
@@ -426,7 +463,7 @@ class ScrapeUrlErrorMappingTests(unittest.IsolatedAsyncioTestCase):
 class ScrapeUrlDocumentPathTests(unittest.IsolatedAsyncioTestCase):
     async def test_pdf_path_returns_grounded_prompt_with_null_metadata(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/file.pdf",
@@ -446,7 +483,7 @@ class ScrapeUrlDocumentPathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_pdf_path_omits_metadata_when_include_metadata_false(self) -> None:
         with patch(
-            "tinysearch.services.scrape_service.assert_url_is_fetchable", side_effect=_fake_safe_url
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
         ):
             result = await scrape_url(
                 "https://example.com/file.pdf",

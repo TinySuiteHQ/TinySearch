@@ -15,9 +15,9 @@ from tinysearch.services.embedding_service import (
     normalize_embedding_backend,
     resolve_local_embedding_model_spec,
 )
-from tinysearch.services.research_config_service import (
-    load_research_config,
-    resolve_research_config_path,
+from tinysearch.services.tinysearch_config_service import (
+    load_tinysearch_config,
+    resolve_tinysearch_config_path,
 )
 
 
@@ -63,8 +63,8 @@ def _check_writable(path: Path) -> tuple[bool, str]:
 
 def run() -> int:
     """Print a readiness report to stderr. Returns 0 if every check passes, else 1."""
-    config_path = resolve_research_config_path()
-    config = load_research_config()
+    config_path = resolve_tinysearch_config_path()
+    config = load_tinysearch_config()
     _log(
         f"config: {config_path} "
         f"({'found' if config_path.exists() else 'not found, using built-in defaults'})"
