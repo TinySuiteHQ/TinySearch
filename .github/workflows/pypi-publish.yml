@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/tinysuite-tinysearch
+      url: https://pypi.org/p/tinysuite-search
     permissions:
       id-token: write
 

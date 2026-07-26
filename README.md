@@ -69,8 +69,8 @@ search product.
 
 | Tier | Use it when | Entry point | Search backend |
 | --- | --- | --- | --- |
-| 1. Python library | You are building with TinySuite or Python | `pip install tinysuite-tinysearch` | DDGS |
-| 2. One-command MCP | An MCP client should launch TinySearch for you | `uvx --from "tinysuite-tinysearch[server]" tinysearch` | DDGS |
+| 1. Python library | You are building with TinySuite or Python | `pip install tinysuite-search` | DDGS |
+| 2. One-command MCP | An MCP client should launch TinySearch for you | `uvx --from "tinysuite-search[server]" tinysearch` | DDGS |
 | 3. Docker + SearXNG | You want the full self-hosted stack and HTTP MCP | `docker compose ... up -d` | Bundled SearXNG |
 
 Tiers 1 and 2 need no search service. Tier 3 adds a dedicated SearXNG service,
@@ -82,7 +82,7 @@ the sections below.
 Install the core package without server dependencies:
 
 ```bash
-pip install tinysuite-tinysearch
+pip install tinysuite-search
 ```
 
 Retrieval returns a stable, JSON-serializable evidence result:
@@ -130,7 +130,7 @@ If you have [`uv`](https://docs.astral.sh/uv/), an MCP client can run the PyPI
 package directly. No clone, virtual environment, Docker, or SearXNG is needed:
 
 ```bash
-uvx --from "tinysuite-tinysearch[server]" tinysearch
+uvx --from "tinysuite-search[server]" tinysearch
 ```
 
 The command starts a stdio MCP server. Put the same command in your MCP client:
@@ -142,7 +142,7 @@ The command starts a stdio MCP server. Put the same command in your MCP client:
       "command": "uvx",
       "args": [
         "--from",
-        "tinysuite-tinysearch[server]",
+        "tinysuite-search[server]",
         "tinysearch"
       ]
     }
@@ -154,7 +154,7 @@ TinySearch downloads the selected local embedding model on first start. Install
 Chromium once before the first crawl:
 
 ```bash
-uvx --from "tinysuite-tinysearch[server]" tinysearch setup
+uvx --from "tinysuite-search[server]" tinysearch setup
 ```
 
 Use `tinysearch_config.json` via `TINYSEARCH_CONFIG_PATH` for full
@@ -389,7 +389,7 @@ volume keeps downloaded model bundles between launches.
 
 Useful when you want HTTP instead of MCP:
 
-Install `tinysuite-tinysearch[server]`, then run:
+Install `tinysuite-search[server]`, then run:
 
 ```bash
 uvicorn tinysearch.servers.fastapi_server:app --reload

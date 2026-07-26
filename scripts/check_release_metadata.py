@@ -13,7 +13,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_NAME = "io.github.MarcellM01/tinysearch"
-PYPI_PACKAGE = "tinysuite-tinysearch"
+PYPI_PACKAGE = "tinysuite-search"
 OCI_REPOSITORY = "docker.io/marcellm01/tinysearch"
 
 

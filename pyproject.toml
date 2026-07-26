@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tinysuite-tinysearch"
+name = "tinysuite-search"
 version = "0.4.0"
 description = "Local web retrieval with ranked, source-grounded evidence."
 readme = "README.md"

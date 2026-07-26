@@ -39,7 +39,7 @@ jobs:
       - name: Verify core imports without declared server dependencies
         run: |
           python -c "import tinysearch; from tinysearch import TinySearchConfig, to_prompt"
-          python -c "import importlib.metadata as m; r=m.requires('tinysuite-tinysearch') or []; assert not any(x.lower().startswith(('fastapi','uvicorn','mcp')) and 'extra ==' not in x.lower() for x in r)"
+          python -c "import importlib.metadata as m; r=m.requires('tinysuite-search') or []; assert not any(x.lower().startswith(('fastapi','uvicorn','mcp')) and 'extra ==' not in x.lower() for x in r)"
 
       - name: Run core contract tests
         run: python -m unittest tests.test_core tests.test_public_config_and_results tests.test_research_pipeline tests.test_scrape_pipeline tests.test_grounded_prompt_service
@@ -112,7 +112,7 @@ jobs:
       - name: Verify installed wheel away from the checkout
         working-directory: ${{ runner.temp }}
         run: |
-          "${RUNNER_TEMP}/tinysearch-wheel/bin/python" -c "import importlib.metadata as m, json, os, tinysearch, tomllib; expected=tomllib.load(open(os.path.join(os.environ['GITHUB_WORKSPACE'], 'pyproject.toml'), 'rb'))['project']['version']; assert m.version('tinysuite-tinysearch') == expected; json.dumps(tinysearch.TinySearchConfig().to_dict())"
+          "${RUNNER_TEMP}/tinysearch-wheel/bin/python" -c "import importlib.metadata as m, json, os, tinysearch, tomllib; expected=tomllib.load(open(os.path.join(os.environ['GITHUB_WORKSPACE'], 'pyproject.toml'), 'rb'))['project']['version']; assert m.version('tinysuite-search') == expected; json.dumps(tinysearch.TinySearchConfig().to_dict())"
           "${RUNNER_TEMP}/tinysearch-wheel/bin/python" "${GITHUB_WORKSPACE}/scripts/smoke_mcp_stdio.py"
 
       - name: Upload distributions

@@ -16,7 +16,7 @@ import sys
 def _server_dependency_error(exc: ModuleNotFoundError) -> int:
     print(
         "TinySearch server dependencies are not installed.\n"
-        'Install them with: pip install "tinysuite-tinysearch[server]"',
+        'Install them with: pip install "tinysuite-search[server]"',
         file=sys.stderr,
     )
     return 2
