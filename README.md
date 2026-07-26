@@ -8,7 +8,27 @@
   </a>
 </p>
 
+<p align="center">
+  <strong>Spend tokens on answers, not webpages.</strong>
+</p>
+
+<p align="center">
+  TinySearch searches, crawls, and reranks the web locally, then gives your
+  agent only the evidence worth putting in its context.
+</p>
+
+<p align="center">
+  <a href="https://tinysuite.dev/docs/tinysearch/">Documentation</a>
+  ·
+  <a href="#quick-start">Quick start</a>
+  ·
+  <a href="#python-library">Python</a>
+  ·
+  <a href="https://discord.gg/NG6u2zamR">Discord</a>
+</p>
+
 [![Website](https://img.shields.io/badge/tinysuite.dev-home-000000?logo=googlechrome&logoColor=white)](https://tinysuite.dev)
+[![PyPI version](https://img.shields.io/pypi/v/tinysuite-search?label=pypi)](https://pypi.org/project/tinysuite-search/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/MarcellM01/TinySearch?label=release)](https://github.com/MarcellM01/TinySearch/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/MarcellM01/TinySearch)](https://github.com/MarcellM01/TinySearch/commits/main)
@@ -17,53 +37,39 @@
 ![MCP Server](https://img.shields.io/badge/MCP-server-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
-**Self-hosted web research for MCP agents.**
-
-TinySearch gives local AI agents a web-research tool they can actually use:
-search the web, rerank results, crawl the best pages, and return structured,
-source-grounded evidence that can optionally be rendered as an LLM prompt.
-
-<p align="center">
-  <img src="assets/tinysearch-readme.gif" alt="TinySearch terminal demo showing a source-grounded research prompt" width="780" />
-</p>
-
-No hosted dashboard. No account system. No analytics. No scraped-data cache.
-
-Just search -> crawl -> rerank -> structured evidence.
-
 ## Contents
 
-- [Why people use it](#why-people-use-it)
 - [Choose a tier](#choose-a-tier)
-- [Python library](#python-library)
+- [The expensive part of agent research is context](#the-expensive-part-of-agent-research-is-context)
 - [Quick start](#quick-start)
+- [What your agent gets](#what-your-agent-gets)
+- [Three focused tools](#three-focused-tools)
 - [How it works](#how-it-works)
-- [Run from source](#run-from-source)
-- [Docker](#docker)
-- [Optional HTTP server](#optional-http-server)
-- [Configuration](#configuration)
+- [Python library](#python-library)
 - [Search backends](#search-backends)
+- [Why TinySearch](#why-tinysearch)
+- [Part of TinySuite](#part-of-tinysuite)
+- [Documentation](#documentation)
 - [When not to use TinySearch](#when-not-to-use-tinysearch)
-- [TinySearch vs...](#tinysearch-vs)
-- [Community](#community)
+- [Development](#development)
 - [Entrypoints](#entrypoints)
-- [Tests](#tests)
-- [Contact](#contact)
-- [Privacy notes](#privacy-notes)
-- [License](#license)
+- [Community](#community)
+- [Privacy and license](#privacy-and-license)
 
-## Why people use it
+TinySearch is a self-hosted web-research tool for AI agents. It searches the
+web, reads the best pages, removes low-value content, and returns compact
+evidence with source URLs.
 
-- Add web research to Cursor, Cline, Roo Code, Claude Desktop, or any MCP client.
-- Keep source URLs attached to the evidence your model sees.
-- Avoid dumping full webpages into context.
-- Run with local ONNX embeddings by default, or bring an OpenAI-compatible embedding API.
-- Use DDGS with no search service, or add the bundled SearXNG deployment.
-- Keep the stack small enough to run locally in Docker.
+Your model receives the useful passages instead of paying to process entire
+webpages.
 
-TinySearch is built for local agents, prototypes, personal workflows, and small
-systems where source-grounded web research matters more than running a full
-search product.
+TinySearch is part of [TinySuite](https://tinysuite.dev), a suite of focused
+tools designed to make agentic operations cheaper by minimizing token usage
+through smart retrieval, selection, and context-management techniques.
+
+<p align="center">
+  <img src="assets/tinysearch-readme.gif" alt="TinySearch returning source-grounded web evidence to an AI agent" width="780" />
+</p>
 
 ## Choose a tier
 
@@ -74,66 +80,45 @@ search product.
 | 3. Docker + SearXNG | You want the full self-hosted stack and HTTP MCP | `docker compose ... up -d` | Bundled SearXNG |
 
 Tiers 1 and 2 need no search service. Tier 3 adds a dedicated SearXNG service,
-persistent model storage, and a network MCP endpoint. Detailed setup follows in
-the sections below.
+persistent model storage, and a network MCP endpoint. See the
+[installation guide](https://tinysuite.dev/docs/tinysearch/) for the Docker
+setup.
 
-## Python library
+## The expensive part of agent research is context
 
-Install the core package without server dependencies:
+A search result is not yet useful evidence. Agents often have to open several
+pages, ingest navigation and boilerplate, and spend paid input tokens deciding
+which passages matter.
 
-```bash
-pip install tinysuite-search
+TinySearch moves that work in front of the model:
+
+```mermaid
+flowchart LR
+    A[Question] --> B[Search and crawl]
+    B --> C[Local hybrid reranking]
+    C --> D[Compact evidence<br/>with source URLs]
+    D --> E[Your agent]
 ```
 
-Retrieval returns a stable, JSON-serializable evidence result:
+That lowers cost in three ways:
 
-```python
-import asyncio
-from tinysearch import TinySearchConfig, research, to_prompt
+- **Smaller model context.** Only the best-ranked evidence chunks are returned,
+  within a controlled evidence budget.
+- **No metered search API required by default.** TinySearch can search through
+  DDGS without a paid search provider.
+- **Local retrieval by default.** ONNX embeddings and hybrid reranking run on
+  your machine instead of creating embedding API charges.
 
-async def main():
-    result = await research(
-        "How does asyncio cancellation work?",
-        config=TinySearchConfig(
-            search_top_k=10,
-            embedding_backend="onnx",
-            embedding_model="balanced",
-        ),
-    )
-    print(result["sources"])
+Search broadly. Read locally. Pay the model only for the evidence that matters.
 
-    # Render the same evidence for an LLM only when needed.
-    print(to_prompt(result))
-
-asyncio.run(main())
-```
-
-Library calls use canonical DDGS defaults and do not implicitly read
-environment variables, the current directory, or a repository config file.
-Pass a `TinySearchConfig`, partial dictionary, or explicitly loaded JSON config
-when you want overrides.
-
-Migration from the prompt-first Python API:
-
-```python
-# Before
-prompt = (await research(query))["answer"]
-
-# After
-result = await research(query)
-prompt = to_prompt(result)
-```
+Actual savings depend on the pages, evidence limits, client model, and provider
+pricing. TinySearch reduces the web content sent to the model; it does not
+control what the client does with that evidence afterward.
 
 ## Quick start
 
-If you have [`uv`](https://docs.astral.sh/uv/), an MCP client can run the PyPI
-package directly. No clone, virtual environment, Docker, or SearXNG is needed:
-
-```bash
-uvx --from "tinysuite-search[server]" tinysearch
-```
-
-The command starts a stdio MCP server. Put the same command in your MCP client:
+With [`uv`](https://docs.astral.sh/uv/) installed, add TinySearch to any MCP
+client:
 
 ```json
 {
@@ -150,538 +135,224 @@ The command starts a stdio MCP server. Put the same command in your MCP client:
 }
 ```
 
-TinySearch downloads the selected local embedding model on first start. Install
-Chromium once before the first crawl:
+The client launches TinySearch over stdio when it needs it. No repository
+clone, hosted account, or paid search key is required.
+
+On first launch, TinySearch installs Chromium and downloads the local
+embedding model before it starts accepting requests — a one-time delay of a
+minute or two. To avoid that delay on the first real query, pre-warm both
+ahead of time:
 
 ```bash
 uvx --from "tinysuite-search[server]" tinysearch setup
 ```
 
-Use `tinysearch_config.json` via `TINYSEARCH_CONFIG_PATH` for full
-configuration, or select a local embedding preset directly in the MCP client's
-environment:
+Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
+[installation guide](https://tinysuite.dev/docs/tinysearch/).
+
+## What your agent gets
+
+TinySearch does not spend another model call writing the final answer. It gives
+your existing agent ranked, source-grounded evidence to reason over.
+
+An abridged structured result looks like this:
 
 ```json
 {
-  "env": {
-    "TINYSEARCH_EMBEDDING_BACKEND": "onnx",
-    "TINYSEARCH_EMBEDDING_MODEL": "balanced"
+  "schema_version": "1",
+  "operation": "research",
+  "status": "ok",
+  "query": "How does asyncio cancellation work?",
+  "sources": [
+    {
+      "title": "Coroutines and Tasks",
+      "url": "https://docs.python.org/3/library/asyncio-task.html",
+      "chunks": [
+        {
+          "text": "Tasks can be cancelled...",
+          "tokens": 146,
+          "rank": 1,
+          "scores": {
+            "rrf": 0.91,
+            "dense": 0.88,
+            "bm25": 0.79
+          }
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "search_results": 10,
+    "sources_crawled": 4,
+    "chunks_considered": 86,
+    "chunks_selected": 8
   }
 }
 ```
 
-Supported backends are `onnx` (local, default) and `openai_compatible`.
-Supported local presets are `fast` (default), `balanced`, and `quality`.
+MCP tools return the same evidence as a grounded prompt by default, ready for
+the client model to use. Pass `output_format: "json"` when you want the
+structured result directly.
 
-TinySearch exposes three MCP tools:
+## Three focused tools
 
-```text
-get_current_datetime()
-research(query)
-scrape_url(url, query)
-```
+| Tool | Use it when |
+| --- | --- |
+| `research(query)` | The agent needs to discover and compare relevant sources |
+| `scrape_url(url, query)` | You already know which page should be inspected |
+| `get_current_datetime()` | Research depends on the current date or time |
 
-Typical routing:
+TinySearch deliberately stays focused. It is a retrieval layer, not another
+agent, chat interface, hosted search product, or permanent web index.
 
-- Use `research(query)` when the agent needs to discover relevant URLs.
-- Use `scrape_url(url, query)` when the user already provided a URL, or when
-  `research` found the page to inspect.
-- Use `get_current_datetime()` before time-sensitive research.
-
-The tools return a grounded prompt in the `answer` field by default. Pass
-`output_format: "json"` to receive the schema-v1 structured evidence instead.
+See the complete [MCP tool reference](https://tinysuite.dev/docs/tinysearch/mcp-tools/)
+for parameters and response contracts.
 
 ## How it works
 
-```mermaid
-flowchart TB
-    subgraph Row1["Search and choose pages"]
-        direction LR
-        A[User query] --> B[Web search<br/>DDGS or SearXNG]
-        B --> C[Filter HTTP results<br/>build title URL domain snippet docs]
-        C --> D[Rank search docs<br/>dense + BM25 weighted RRF]
-    end
+1. Search the web with DDGS or your own SearXNG instance.
+2. Hybrid-rank the search results to choose which pages are worth reading.
+3. Crawl those pages in parallel and extract readable content.
+4. Chunk, deduplicate, and hybrid-rank the combined evidence pool.
+5. Return the best passages with their titles, URLs, ranks, and scores.
 
-    subgraph Row2["Crawl and return evidence"]
-        direction LR
-        E[Crawl kept URLs in parallel<br/>crawl4ai markdown] --> F[Truncate and chunk markdown]
-        F --> G[Rank combined chunk pool<br/>dense + BM25 weighted RRF]
-        G --> H[Dedupe chunks<br/>apply source quotas and fill]
-        H --> I[Return structured evidence<br/>optionally render a prompt]
-    end
+Dense and lexical ranking happen before the evidence reaches your model. The
+model gets a small, relevant research packet rather than a pile of raw pages.
 
-    Row1 --> Row2
+## Python library
+
+TinySearch also works as a regular Python package:
+
+```bash
+pip install tinysuite-search
 ```
 
-TinySearch does not directly answer the question. The core returns structured
-evidence; MCP renders that evidence into the **`answer` field** by default, and
-your **client model** produces the final **cited response**.
+```python
+import asyncio
+from tinysearch import research, to_prompt
 
-`scrape_url` runs the single-URL version of the retrieval pipeline: validate
-the URL, extract readable content, chunk it, hybrid-rank the chunks with dense
-embeddings and BM25, and fit the selected evidence to the requested token
-budget. It skips only web discovery and search-result ranking.
 
-<p align="center">
-  <img src="assets/demo_terminal_prompt.gif" alt="TinySearch terminal demo showing a source-grounded research prompt" width="780" />
-</p>
+async def main():
+    evidence = await research("How does asyncio cancellation work?")
 
-## Run from source
+    print(evidence["sources"])
+    print(to_prompt(evidence))
 
-Use this path if you want to inspect the code, edit TinySearch, or run it as a
-local stdio MCP server.
+
+asyncio.run(main())
+```
+
+The Python API returns a stable, JSON-serializable evidence schema. Rendering
+that evidence into an LLM prompt is explicit, so applications can store,
+inspect, transform, or budget the result first.
+
+## Search backends
+
+TinySearch selects a web-search backend from config, so you can start with no
+search service and add one later without changing code.
+
+- `"ddgs"` (native default): queries the [`ddgs`](https://pypi.org/project/ddgs/)
+  package's automatic backend selection in-process. No SearXNG deployment
+  required.
+- `"searxng"` (Docker default): queries a self-hosted SearXNG instance. Falls
+  back to `ddgs` on backend failure unless `search_backend_fallback` is set to
+  `false`.
+- `"duckduckgo"`: skips SearXNG and queries `ddgs` in DuckDuckGo-only mode.
+- `"auto"`: tries SearXNG, then falls back to `ddgs` on any backend failure.
+
+Set the `BRAVE_SEARCH_API_KEY` environment variable to add Brave's official
+Web Search API as a keyed fallback for the `ddgs` and `duckduckgo` backends.
+Brave is only consulted when the primary call errors or returns no results.
+
+Full key reference, SearXNG JSON-output setup, and Compose details live in the
+[configuration reference](https://tinysuite.dev/docs/tinysearch/configuration/).
+
+## Why TinySearch
+
+- **Built around token efficiency.** Page selection and passage selection
+  happen before content enters model context.
+- **Source-grounded by construction.** Every evidence group stays attached to
+  its originating URL.
+- **Useful without paid infrastructure.** DDGS search and local ONNX embeddings
+  are the defaults.
+- **Bring your own stack when needed.** SearXNG and OpenAI-compatible embedding
+  providers remain optional.
+- **Works where agents already work.** Use MCP over stdio, Streamable HTTP,
+  Python, FastAPI, or Docker.
+- **Self-hosted and inspectable.** No TinySearch account, analytics service, or
+  hosted scraped-data cache.
+
+## Part of TinySuite
+
+[TinySuite](https://tinysuite.dev) is a product suite built around one idea:
+agents should spend tokens on useful work, not operational overhead.
+
+Each tool focuses on a different part of the agent workflow and uses targeted
+techniques to reduce unnecessary context before it reaches the model.
+TinySearch handles the web-research layer by turning pages into a small,
+ranked, source-grounded evidence packet.
+
+## Documentation
+
+The README is the product overview. Detailed setup and operational material
+lives in the TinySuite documentation:
+
+- [TinySearch overview and installation](https://tinysuite.dev/docs/tinysearch/)
+- [Configuration reference](https://tinysuite.dev/docs/tinysearch/configuration/)
+- [MCP tools](https://tinysuite.dev/docs/tinysearch/mcp-tools/)
+- [Troubleshooting](https://tinysuite.dev/docs/tinysearch/troubleshooting/)
+
+The repository also contains an annotated example configuration at
+[`configs/tinysearch_config.json`](configs/tinysearch_config.json).
+
+## When not to use TinySearch
+
+TinySearch is intentionally lightweight. Use a commercial search API,
+persistent crawler, or full search index when you need:
+
+- guaranteed search coverage or an SLA
+- large-scale or scheduled indexing
+- long-term page storage and change history
+- enterprise observability and access controls
+
+## Development
 
 ```bash
 git clone https://github.com/MarcellM01/TinySearch
 cd TinySearch
-
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[server]"
+python -m unittest discover tests
 ```
 
-MCP clients spawn TinySearch from their config. Add it with absolute paths:
-
-macOS / Linux:
-
-```json
-{
-  "mcpServers": {
-    "tinysearch": {
-      "command": "/absolute/path/to/TinySearch/.venv/bin/python",
-      "args": [
-        "/absolute/path/to/TinySearch/servers/mcp_server.py"
-      ]
-    }
-  }
-}
-```
-
-Windows:
-
-```json
-{
-  "mcpServers": {
-    "tinysearch": {
-      "command": "C:/absolute/path/to/TinySearch/.venv/Scripts/python.exe",
-      "args": [
-        "C:/absolute/path/to/TinySearch/servers/mcp_server.py"
-      ]
-    }
-  }
-}
-```
-
-Template config files live in `mcp_templates/`.
-
-The repo also includes [`agentic_coding_templates/global-rules-recommended.md`](agentic_coding_templates/global-rules-recommended.md),
-a global-rules template for agentic coding tools such as Cline and Roo Code.
-These rules help coding agents call TinySearch only when web research is
-actually needed.
-
-The server uses **stdio** by default, which is what Cursor and similar clients
-expect when they spawn `python .../mcp_server.py`. To run with `sse` or
-`streamable-http`, set `MCP_TRANSPORT` when starting the process. Do not put
-transport in `configs/tinysearch_config.json`.
-
-## Docker
-
-The full deployment runs TinySearch with its own SearXNG instance over
-Streamable HTTP. It loads the Compose file directly from GitHub, so no clone or
-local configuration file is needed:
-
-```bash
-docker compose -f "https://github.com/MarcellM01/TinySearch.git#main:compose.quickstart.yaml" up -d
-```
-
-Connect the MCP client to `http://localhost:8000/mcp`:
-
-```json
-{
-  "mcpServers": {
-    "tinysearch": {
-      "url": "http://localhost:8000/mcp"
-    }
-  }
-}
-```
-
-Stop the stack with:
-
-```bash
-docker compose -f "https://github.com/MarcellM01/TinySearch.git#main:compose.quickstart.yaml" down
-```
-
-Docker pulls `marcellm01/tinysearch:latest` automatically if the image is not
-already local.
-
-With `MCP_TRANSPORT=streamable-http`, the image serves Streamable HTTP on
-`/mcp` and SSE on `/mcp/sse`. GET requests to `/mcp` without an
-`mcp-session-id` are treated as the legacy SSE stream. If a client still cannot
-connect, try `MCP_TRANSPORT=sse` alone or the stdio Docker setup below.
-
-### Docker image tags
-
-Docker images are published automatically when a version tag or GitHub release is created.
-
-- `marcellm01/tinysearch:<version>` is published for tags such as `v0.1.4`.
-- `marcellm01/tinysearch:latest` is updated for stable releases.
-- Images are built for both `linux/amd64` and `linux/arm64`.
-
-### Persistent models and config
-
-For repeated use, keep downloaded models in a Docker volume and mount your local
-config. The mounted config can also include `blocked_domains` to exclude sites
-from search results:
-
-```bash
-docker run --rm \
-  -p 8000:8000 \
-  -v tinysearch-models:/data/models \
-  -v "$PWD/configs/tinysearch_config.json:/config/tinysearch_config.json:ro" \
-  -e TINYSEARCH_CONFIG_PATH=/config/tinysearch_config.json \
-  -e MCP_TRANSPORT=streamable-http \
-  -e MCP_HOST=0.0.0.0 \
-  marcellm01/tinysearch:latest
-```
-
-Example config entry:
-
-```json
-"blocked_domains": ["example.com", "spammy-site.test"]
-```
-
-### MCP over stdio
-
-Use this mode for MCP clients that launch tools as local commands instead of
-connecting to a URL. Replace `/absolute/path/to/TinySearch` with this repo's
-absolute path:
-
-```json
-{
-  "mcpServers": {
-    "tinysearch": {
-      "command": "docker",
-      "args": [
-        "run",
-        "--rm",
-        "-i",
-        "-v",
-        "tinysearch-models:/data/models",
-        "-v",
-        "/absolute/path/to/TinySearch/configs/tinysearch_config.json:/config/tinysearch_config.json:ro",
-        "-e",
-        "TINYSEARCH_CONFIG_PATH=/config/tinysearch_config.json",
-        "-e",
-        "TINYSEARCH_MODELS_DIR=/data/models",
-        "marcellm01/tinysearch:latest"
-      ]
-    }
-  }
-}
-```
-
-Edit `configs/tinysearch_config.json` to choose `embedding_model` (`fast`,
-`balanced`, `quality`, or a custom Hugging Face ONNX repo id). The named Docker
-volume keeps downloaded model bundles between launches.
-
-## Optional HTTP server
-
-Useful when you want HTTP instead of MCP:
-
-Install `tinysuite-search[server]`, then run:
-
-```bash
-uvicorn tinysearch.servers.fastapi_server:app --reload
-```
-
-Endpoints mirror the MCP tools:
-
-- `GET /health`
-- `GET /current_datetime`
-- `POST /research` — `{"query": "...", "output_format": "prompt"}`
-- `POST /scrape` — `{"url": "...", "query": "...", "output_format": "prompt"}`
-
-`output_format` accepts `prompt` (the compatibility default) or `json`.
-JSON mode returns the same schema-v1 evidence as the Python API.
-
-Errors return `{"detail": {"code", "message"}}` with stable codes:
-`invalid_url` (400), `blocked_url` (403), `unsupported_document` (415),
-`empty_content` (422), `fetch_failed` (502), `fetch_timeout` (504).
-
-### URL safety
-
-`/scrape` and `scrape_url` accept arbitrary user-supplied URLs and enforce
-the following checks before fetching:
-
-- only `http` and `https` schemes
-- URLs with embedded credentials are rejected
-- IP literals and resolved addresses that are loopback, private, link-local,
-  multicast, reserved or unspecified are rejected (DNS rebinding is mitigated
-  by rejecting if **any** resolved address is non-public, not just one)
-- the configured `blocked_domains` list is applied to both the initial URL
-  and the final URL reported by the crawler after redirects
-
-Crawl4AI does not expose intermediate redirect hops, so the safety check runs
-on the initial URL and the final URL. If you need stricter handling for
-redirect chains, run TinySearch behind an egress proxy that enforces your
-policy.
-
-## Configuration
-
-The Python API owns one canonical default configuration and accepts explicit
-configuration objects or dictionaries. Server processes additionally support
-`TINYSEARCH_CONFIG_PATH`; `SEARXNG_URL` and `TINYSEARCH_SEARCH_BACKEND` are
-server/deployment overrides. Precedence is CLI/runtime overrides, environment,
-the explicit server config file, then core defaults.
-
-[`configs/tinysearch_config.json`](configs/tinysearch_config.json) is the full
-annotated configuration reference and the profile loaded by `compose.yaml`.
-Every supported setting is present. Its `_comment_*` entries explain what each
-setting controls, when to change it, and why; TinySearch ignores those entries
-when loading the file. The Python and one-command MCP paths still use package
-defaults unless you explicitly pass or load this file.
-
-Set `blocked_domains` to a JSON list of domains you do not want TinySearch to
-return or crawl. Entries match the domain and its subdomains, so `example.com`
-also blocks `www.example.com` and `news.example.com`. URL-style entries such as
-`https://example.com/path` are accepted and normalized to their hostname.
-
-Choose the embedding implementation with `embedding_backend` and the model
-within that implementation with `embedding_model`. The `onnx` backend uses
-local ONNX bundles under `models/`. Starting the MCP server or FastAPI app
-downloads the configured `embedding_model` once from Hugging Face. The server
-also accepts `TINYSEARCH_EMBEDDING_BACKEND` and
-`TINYSEARCH_EMBEDDING_MODEL` as deployment overrides.
-
-Local example:
-
-```json
-{
-  "embedding_backend": "onnx",
-  "embedding_model": "balanced"
-}
-```
-
-OpenAI-compatible example:
-
-```json
-{
-  "embedding_backend": "openai_compatible",
-  "embedding_openai_env_file": ".env"
-}
-```
-
-Built-in local presets:
-
-- `fast`: `onnx-models/all-MiniLM-L6-v2-onnx`
-- `balanced`: `BAAI/bge-small-en-v1.5`
-- `quality`: `BAAI/bge-base-en-v1.5`
-
-You can also set `embedding_model` to a custom Hugging Face ONNX repo id. Set
-`TINYSEARCH_MODELS_DIR` to move the model cache, or use
-`TINYSEARCH_ONNX_MODEL_DIR` when you need to point at one exact bundle directory.
-
-Key settings:
-
-- Search: `search_top_k`, `search_rrf_cutoff`, `search_dense_weight`, `search_max_results_to_keep`, `blocked_domains`
-- Search backend: `search_backend`, `search_backend_url`, `search_engines`, `search_region`, `search_backend_fallback`, `ddgs_backend`, `ddgs_timeout_seconds`
-- Chunks: `chunk_rrf_cutoff`, `chunk_dense_weight`, `chunk_max_results_to_keep`
-- Crawl: `crawl_max_chunk_tokens`, `crawl_overlap_tokens`, `max_concurrent_crawls`
-- Embeddings: `embedding_backend`, `embedding_model`, `embedding_openai_env_file`, `max_concurrent_embedding_calls`
-- Tokenizer: `encoding_name`
-- Dense input prefixes: `dense_query_prefix`, `dense_document_prefix`
-- Trace: `trace_path`
-
-For `embedding_backend` `openai_compatible`, add a `.env` file at the project
-root, or set `embedding_openai_env_file`, with:
-
-```text
-OPENAI_BASE_URL=
-OPENAI_API_KEY=
-OPENAI_EMBEDDING_MODEL=
-```
-
-`OPENAI_BASE_URL` is optional for api.openai.com. `EMBEDDING_MODEL` and
-`MODEL_NAME` are accepted as aliases for `OPENAI_EMBEDDING_MODEL`.
-
-The research pipeline requires dense embeddings. It raises if
-`search_dense_weight` or `chunk_dense_weight` is set to `0`.
-
-## Search backends
-
-TinySearch supports multiple web-search backends and selects between them
-from config.
-
-Native (non-Docker) installs default to `search_backend: "ddgs"`, which uses
-the [`ddgs`](https://pypi.org/project/ddgs/) package's automatic text-search
-backend selection in-process — no SearXNG deployment required. The bundled
-Docker Compose setup instead defaults to `search_backend: "searxng"`, with a
-local SearXNG sidecar.
-
-Available values for `search_backend`:
-
-- `"ddgs"` (native default): query `ddgs`'s automatic backend selection
-  directly. Tune it with `ddgs_backend` (defaults to `"auto"`) and
-  `ddgs_timeout_seconds` (defaults to `20`).
-- `"searxng"` (Docker default): query a SearXNG-compatible JSON endpoint. If
-  the call fails and `search_backend_fallback` is `true`, TinySearch falls
-  back to `ddgs` in DuckDuckGo compatibility mode. With
-  `search_backend_fallback: false` the SearXNG error surfaces.
-- `"duckduckgo"`: skip SearXNG entirely and query `ddgs` with
-  `backend="duckduckgo"`. This is the escape hatch that preserves pre-0.4
-  DuckDuckGo-only behavior (previously a hand-written HTML scraper, now
-  DDGS-backed).
-- `"auto"`: try SearXNG, then `ddgs` in DuckDuckGo compatibility mode on any
-  backend failure (fallback is implied regardless of
-  `search_backend_fallback`).
-
-A backend "failure" means a real backend error: network/timeout, non-200 HTTP
-response, a non-JSON SearXNG body, or a `ddgs` rate-limit/error response. A
-legitimate empty result set is **not** a failure and does not trigger
-fallback.
-
-Minimal config example:
-
-```json
-{
-  "search_backend": "ddgs",
-  "ddgs_backend": "auto",
-  "ddgs_timeout_seconds": 20,
-  "search_region": "us-en"
-}
-```
-
-### Brave keyed fallback
-
-Set the `BRAVE_SEARCH_API_KEY` environment variable to enable Brave's
-official Web Search API as a fallback for the `ddgs` and `duckduckgo`
-backends. Brave is only ever consulted when the primary `ddgs` call errors or
-returns no results, and only when the key is present — with no key, DDGS
-failures and legitimate empty results propagate exactly as they would
-otherwise. The key is read from the environment on every call; it is never
-written to a config file, saved, or logged. Brave is not a selectable
-`search_backend` value on its own, and `"searxng"`/`"auto"` never consult it.
-
-### SearXNG JSON output is required
-
-SearXNG ships with the JSON output format **disabled** by default. The bundled
-`searxng/settings.yml` enables it via:
-
-```yaml
-search:
-  formats:
-    - html
-    - json
-```
-
-If TinySearch reports `SearchBackendUnavailable: SearXNG did not return JSON`,
-your SearXNG instance is returning HTML — add `json` to `search.formats` and
-restart it.
-
-### Environment overrides
-
-- `SEARXNG_URL`: overrides `search_backend_url` for the running process. Useful
-  in Docker so the same image can point at different SearXNG endpoints without
-  rebuilding `tinysearch_config.json`.
-
-### Compose setup
-
-The bundled `compose.yaml` starts a `searxng` service alongside `tinysearch`
-(and optionally `fastapi`). Both TinySearch services reach SearXNG at
-`http://searxng:8080/search` over the internal compose network, and have
-`SEARXNG_URL` set automatically.
-
-```bash
-docker compose up
-```
-
-A minimal `searxng/settings.yml` is committed at the repo root. Override
-`server.secret_key` before exposing the SearXNG instance beyond localhost.
-
-### Single-container / from-source
-
-The Python library and standalone image use the canonical
-`search_backend: "ddgs"` default with no SearXNG involvement. A checkout no
-longer changes defaults merely because `configs/tinysearch_config.json` exists.
-The bundled Compose setup explicitly loads the annotated profile to select
-SearXNG and its tuned retrieval limits.
-
-To force DuckDuckGo-only behavior with no SearXNG involvement, set:
-
-```json
-{ "search_backend": "duckduckgo" }
-```
-
-## When not to use TinySearch
-
-TinySearch is not a replacement for a commercial search API or a persistent
-crawler. It is probably not the right tool if you need:
-
-- guaranteed search coverage
-- large-scale indexing
-- long-term page caching
-- enterprise observability
-- production SLA-backed web search
-
-## TinySearch vs...
-
-| Option | Best when you want | Tradeoff |
-| --- | --- | --- |
-| Search API | Hosted search results with stronger coverage guarantees | Usually paid, hosted, and not MCP-native |
-| SearXNG | Self-hosted metasearch | You still need crawling, reranking, chunking, and prompt assembly |
-| Full crawler / index | Persistent searchable storage | More infrastructure than most local agents need |
-| Browser automation | A model clicking around the web | More tokens, slower runs, and less predictable evidence packing |
-| **TinySearch** | A local MCP research tool that returns ranked, cited evidence chunks | Lightweight by design; not a full search engine or hosted answer API |
-
-## Community
-
-Join the [TinySearch Discord](https://discord.gg/NG6u2zamR) for support,
-release updates, bug reports, and contributor discussion.
+TinySearch supports Python 3.12 and newer. CI tests Python 3.12, 3.13, and 3.14
+across Linux, macOS, and Windows.
 
 ## Entrypoints
 
 - `tinysearch.research` and `tinysearch.scrape_url`: structured Python API
 - `tinysearch.to_prompt`: pure structured-evidence prompt renderer
-- `tinysearch mcp`: stdio MCP server (also the temporary no-argument default)
+- `tinysearch mcp`: stdio MCP server (also the no-argument default)
 - `tinysearch serve`: Streamable HTTP MCP server
 - `tinysearch.servers.fastapi_server:app`: optional FastAPI application
 
-## Tests
+## Community
 
-Run the unittest suite:
+Questions, ideas, and bug reports are welcome:
 
-```bash
-python -m unittest discover tests
-```
+- [Join the TinySearch Discord](https://discord.gg/NG6u2zamR)
+- [Open a GitHub issue](https://github.com/MarcellM01/TinySearch/issues)
+- [Email the maintainer](mailto:hello.marcbuilds@gmail.com)
 
-TinySearch supports Python 3.12 and newer. CI runs the full server suite and
-an MCP stdio handshake on Python 3.12, 3.13, and 3.14 across Linux, macOS, and
-Windows. It also builds and installs the wheel in a fresh environment. A live
-DDGS check is available as an opt-in input on the manually dispatched CI
-workflow, so normal pull requests stay deterministic.
+## Privacy and license
 
-## Contact
+TinySearch reads public pages and returns selected excerpts to the calling
+client. Search, crawling, local embeddings, and reranking can run without
+sending page content to an embedding provider. If you choose an
+OpenAI-compatible embedding backend, that provider receives the text sent for
+vectorization.
 
-Using TinySearch or want to build on it?
-
-[Email me](mailto:hello.marcbuilds@gmail.com) or reach me on [Bluesky](https://bsky.app/profile/marcellm01.bsky.social).
-
-## Privacy notes
-
-TinySearch reads the pages it crawls and returns ranked excerpts to the calling
-client. It does not include credentials in the repo, and `.env` / trace output
-should stay local. If you enable `openai_compatible` embeddings, your embedding
-provider receives the text snippets sent for vectorization.
-
-## License
-
-Source code in this repository is under the [MIT License](LICENSE).
-
-When `embedding_backend` is `onnx`, TinySearch may download the selected local
-ONNX embedding bundle at runtime from Hugging Face. Those weights are separate
-distributions under their model-card licenses; keep license and attribution
-notices if you ship or redistribute those files. Optional manual export for
-`fast` uses `sentence-transformers/all-MiniLM-L6-v2` (Apache-2.0).
-
-See [NOTICE](NOTICE) for Docker and third-party distribution notes.
+TinySearch is available under the [MIT License](LICENSE). Downloaded model
+weights remain subject to their respective model-card licenses. See
+[NOTICE](NOTICE) for third-party distribution details.

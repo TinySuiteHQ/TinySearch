@@ -370,6 +370,11 @@ def main() -> None:
     _enable_traceback_dump()
     cfg = load_tinysearch_config()
     asyncio.run(core._ensure_local_bundle_for_config(cfg))
+
+    from tinysearch.services.browser_bundle_service import ensure_chromium_sync
+
+    ensure_chromium_sync()
+
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError(
