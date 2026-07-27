@@ -37,25 +37,6 @@
 ![MCP Server](https://img.shields.io/badge/MCP-server-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
-## Contents
-
-- [Choose a tier](#choose-a-tier)
-- [The expensive part of agent research is context](#the-expensive-part-of-agent-research-is-context)
-- [Quick start](#quick-start)
-- [What your agent gets](#what-your-agent-gets)
-- [Three focused tools](#three-focused-tools)
-- [How it works](#how-it-works)
-- [Python library](#python-library)
-- [Search backends](#search-backends)
-- [Why TinySearch](#why-tinysearch)
-- [Part of TinySuite](#part-of-tinysuite)
-- [Documentation](#documentation)
-- [When not to use TinySearch](#when-not-to-use-tinysearch)
-- [Development](#development)
-- [Entrypoints](#entrypoints)
-- [Community](#community)
-- [Privacy and license](#privacy-and-license)
-
 TinySearch is a self-hosted web-research tool for AI agents. It searches the
 web, reads the best pages, removes low-value content, and returns compact
 evidence with source URLs.
