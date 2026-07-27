@@ -4,7 +4,7 @@ import unittest
 from inspect import signature
 from unittest.mock import AsyncMock, patch
 
-from tinysearch.servers.mcp_server import scrape_url_tool
+from tinysearch.servers.mcp_server import research, scrape_url_tool
 from tinysearch.services.scrape_service import (
     EmptyContentError,
     FetchFailedError,
@@ -38,10 +38,13 @@ def _fn(coro):
 
 
 class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
-    def test_mcp_signature_exposes_output_format(self) -> None:
+    def test_research_signature_only_exposes_query(self) -> None:
+        self.assertEqual(list(signature(_fn(research)).parameters), ["query"])
+
+    def test_mcp_signature_only_exposes_url_and_query(self) -> None:
         self.assertEqual(
             list(signature(_fn(scrape_url_tool)).parameters),
-            ["url", "query", "output_format"],
+            ["url", "query"],
         )
 
     async def test_returns_answer_and_diagnostics(self) -> None:
@@ -59,13 +62,6 @@ class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(payload["truncated"])
         self.assertEqual(payload["retrieved_at"], "2026-06-12T10:30:00Z")
         self.assertNotIn("metadata", payload)
-
-    async def test_json_output_returns_structured_result(self) -> None:
-        with patch("tinysearch.core.scrape_url", AsyncMock(return_value=_result())):
-            payload = await _fn(scrape_url_tool)(
-                "https://example.com/x", "q", "json"
-            )
-        self.assertEqual(payload["schema_version"], "1")
 
     async def test_default_max_tokens_passed_through(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())

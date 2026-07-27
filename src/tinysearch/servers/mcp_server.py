@@ -5,7 +5,7 @@ import faulthandler
 import os
 import sys
 import time
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
@@ -235,7 +235,7 @@ async def get_current_datetime_tool() -> dict[str, str]:
     title="Research",
     description=(
         "Discover relevant URLs for the user's question, crawl ranked pages, "
-        "and return a search-grounded answer prompt or structured evidence. "
+        "and return a search-grounded answer prompt. "
         "Use this first when you need to find sources. "
         "Pass the user's question as-is. For time-sensitive or relative-date "
         "questions, call get_current_datetime() first unless you already "
@@ -252,15 +252,6 @@ async def research(
             )
         ),
     ],
-    output_format: Annotated[
-        Literal["prompt", "json"],
-        Field(
-            description=(
-                "Return an LLM-ready grounded prompt (default) or structured "
-                "schema-v1 evidence JSON."
-            )
-        ),
-    ] = "prompt",
 ) -> dict[str, Any]:
     started = time.monotonic()
     _log(f"research called query={query!r}")
@@ -268,9 +259,6 @@ async def research(
         config = load_tinysearch_config()
         result = await core.research(query, config=config)
         elapsed = time.monotonic() - started
-        if output_format == "json":
-            _log(f"research returning structured evidence elapsed={elapsed:.2f}s")
-            return result
         from tinysearch.prompts import to_prompt
 
         answer = to_prompt(result)
@@ -315,15 +303,6 @@ async def scrape_url_tool(
             )
         ),
     ],
-    output_format: Annotated[
-        Literal["prompt", "json"],
-        Field(
-            description=(
-                "Return an LLM-ready grounded prompt (default) or structured "
-                "schema-v1 evidence JSON."
-            )
-        ),
-    ] = "prompt",
 ) -> dict[str, Any]:
     started = time.monotonic()
     max_tokens = DEFAULT_SCRAPE_MAX_TOKENS
@@ -342,9 +321,6 @@ async def scrape_url_tool(
         _log(f"scrape_url failed elapsed={elapsed:.2f}s code={code} error={exc!r}")
         raise ValueError(f"{code}: {exc}") from exc
     elapsed = time.monotonic() - started
-    if output_format == "json":
-        _log(f"scrape_url returning structured evidence elapsed={elapsed:.2f}s")
-        return result
     from tinysearch.prompts import to_prompt
 
     answer = to_prompt(result)

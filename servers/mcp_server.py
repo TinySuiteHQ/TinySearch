@@ -1,4 +1,4 @@
-"""Thin wrapper preserving `python servers/mcp_server.py` for Docker/compose/mcp_templates.
+"""Thin wrapper preserving `python servers/mcp_server.py` for Docker and Compose.
 
 The real implementation lives at `tinysearch.servers.mcp_server`.
 """
