@@ -1,9 +1,6 @@
 name: Publish Docker image
 
 on:
-  push:
-    tags:
-      - "v*"
   release:
     types:
       - published
