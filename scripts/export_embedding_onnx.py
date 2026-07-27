@@ -9,7 +9,7 @@ Run:
 
   python scripts/export_embedding_onnx.py
 
-Uses ``services.onnx_bundle_constants.MINILM_SENTENCE_TRANSFORMERS_REPO_ID`` as the HF source.
+Uses ``tinysearch.services.onnx_bundle_constants.MINILM_SENTENCE_TRANSFORMERS_REPO_ID`` as the HF source.
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ import sys
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(_PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(_PROJECT_ROOT))
+_SRC_ROOT = _PROJECT_ROOT / "src"
+if str(_SRC_ROOT) not in sys.path:
+    sys.path.insert(0, str(_SRC_ROOT))
 
-from services.onnx_bundle_constants import MINILM_SENTENCE_TRANSFORMERS_REPO_ID
+from tinysearch.services.onnx_bundle_constants import MINILM_SENTENCE_TRANSFORMERS_REPO_ID
 
 
 def _export(hf_model_id: str, out_dir: Path) -> None:

@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import html as _html
 import json
+import os
 import re
 import socket
 import sys
 import urllib.error
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
-from urllib.parse import parse_qs, quote_plus, unquote, urlencode, urlparse
+from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
@@ -20,6 +20,20 @@ def _async_web_crawler_cls() -> Any:
     from crawl4ai import AsyncWebCrawler
 
     return AsyncWebCrawler
+
+
+@lru_cache(maxsize=1)
+def _ddgs_cls() -> Any:
+    from ddgs import DDGS
+
+    return DDGS
+
+
+@lru_cache(maxsize=1)
+def _ddgs_exceptions() -> tuple[type[Exception], type[Exception], type[Exception]]:
+    from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
+
+    return DDGSException, RatelimitException, TimeoutException
 
 
 def _ensure_utf8_stdio() -> None:
@@ -53,19 +67,17 @@ class SearchBackendBlocked(SearchBackendError):
     """Backend rejected the request (HTTP 403/429 or CAPTCHA/challenge page)."""
 
 
-ALLOWED_SEARCH_BACKENDS: frozenset[str] = frozenset({"searxng", "duckduckgo", "auto"})
-DEFAULT_SEARXNG_URL = "http://searxng:8080/search"
-_DEFAULT_DDG_TIMEOUT = 20.0
-_DEFAULT_SEARXNG_TIMEOUT = 8.0
-
-_DDG_CHALLENGE_MARKERS: tuple[str, ...] = (
-    "anomaly-modal",
-    "anomaly_modal",
-    "captcha-container",
-    "challenge-form",
-    "automated queries",
-    "unusual traffic",
+ALLOWED_SEARCH_BACKENDS: frozenset[str] = frozenset(
+    {"searxng", "duckduckgo", "auto", "ddgs"}
 )
+DEFAULT_SEARXNG_URL = "http://searxng:8080/search"
+DEFAULT_DDGS_REGION = "us-en"
+DEFAULT_DDGS_BACKEND = "auto"
+_DEFAULT_SEARXNG_TIMEOUT = 8.0
+_DEFAULT_DDGS_TIMEOUT = 20.0
+_DEFAULT_BRAVE_TIMEOUT = 10.0
+BRAVE_API_KEY_ENV_VAR = "BRAVE_SEARCH_API_KEY"
+_BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
 
 
 def normalize_domain(value: str) -> str:
@@ -103,41 +115,9 @@ def filter_blocked_search_results(
     ]
 
 
-def _strip_tags(s: str) -> str:
-    return re.sub(r"<[^>]*>", "", s)
-
-
 def _extract_links_from_html(html: str) -> list[str]:
     # Very small/fast extractor; good enough for basic crawling.
     return list(dict.fromkeys(re.findall(r'href="([^"]+)"', html, flags=re.IGNORECASE)))
-
-
-def _decode_duckduckgo_href(href: str) -> str:
-    # DuckDuckGo HTML endpoint often wraps links as /l/?uddg=<urlencoded>
-    parsed = urlparse(href)
-    qs = parse_qs(parsed.query)
-    if "uddg" in qs and qs["uddg"]:
-        return unquote(qs["uddg"][0])
-    return href
-
-
-def _http_get(url: str, *, timeout: float = _DEFAULT_DDG_TIMEOUT) -> str:
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "TinySearch/0.1 (+https://html.duckduckgo.com/html/)",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
-    )
-    with urlopen(req, timeout=timeout) as resp:
-        raw = resp.read()
-        charset = getattr(resp.headers, "get_content_charset", lambda default=None: None)("utf-8") or "utf-8"
-    return raw.decode(charset, errors="replace")
-
-
-def _looks_like_ddg_challenge(html: str) -> bool:
-    lowered = html.lower()
-    return any(marker in lowered for marker in _DDG_CHALLENGE_MARKERS)
 
 
 async def crawl(url: str) -> dict:
@@ -157,57 +137,163 @@ async def crawl(url: str) -> dict:
     return {"url": url, "markdown": markdown, "html": html, "links": links}
 
 
-def _duckduckgo_search(query: str, limit: int) -> list[SearchResult]:
-    """Query DuckDuckGo's HTML endpoint and return the top results."""
-    url = f"https://html.duckduckgo.com/html/?q={quote_plus(query)}"
+def _ddgs_search(
+    query: str,
+    limit: int,
+    *,
+    region: str | None = None,
+    backend: str = DEFAULT_DDGS_BACKEND,
+    timeout: float = _DEFAULT_DDGS_TIMEOUT,
+) -> list[SearchResult]:
+    """Query the ddgs package's automatic text-search backend selection."""
+    DDGS = _ddgs_cls()
+    DDGSException, RatelimitException, TimeoutException = _ddgs_exceptions()
+
+    kwargs: dict[str, Any] = {
+        "safesearch": "moderate",
+        "max_results": limit,
+        "backend": backend or DEFAULT_DDGS_BACKEND,
+    }
+    if region:
+        kwargs["region"] = region
+
     try:
-        html = _http_get(url, timeout=_DEFAULT_DDG_TIMEOUT)
-    except urllib.error.HTTPError as exc:
-        if exc.code in (403, 429):
-            raise SearchBackendBlocked(
-                f"DuckDuckGo refused the request (HTTP {exc.code})"
-            ) from exc
-        raise SearchBackendUnavailable(
-            f"DuckDuckGo returned HTTP {exc.code}"
-        ) from exc
-    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
-        raise SearchBackendUnavailable(
-            f"DuckDuckGo unreachable: {exc}"
-        ) from exc
+        raw_results = DDGS(timeout=timeout).text(query, **kwargs)
+    except TimeoutException as exc:
+        raise SearchBackendUnavailable(f"ddgs timed out: {exc}") from exc
+    except RatelimitException as exc:
+        raise SearchBackendBlocked(f"ddgs rate limited the request: {exc}") from exc
+    except DDGSException as exc:
+        if str(exc) == "No results found.":
+            return []
+        raise SearchBackendUnavailable(f"ddgs request failed: {exc}") from exc
 
-    if _looks_like_ddg_challenge(html):
-        raise SearchBackendBlocked(
-            "DuckDuckGo returned a CAPTCHA/challenge page"
-        )
-
-    # DDG HTML results use anchors like: <a class="result__a" href="...">Title</a>
-    matches = re.findall(
-        r'<a[^>]*class="[^"]*\bresult__a\b[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
-        html,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-
-    snippets = re.findall(
-        r'<a[^>]*class="[^"]*\bresult__snippet\b[^"]*"[^>]*>(.*?)</a>',
-        html,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
+    if not isinstance(raw_results, list):
+        raise SearchBackendUnavailable("ddgs returned a malformed response")
 
     out: list[SearchResult] = []
-    for idx, (href, title_html) in enumerate(matches):
-        result_id = idx + 1
-        title = _html.unescape(_strip_tags(title_html)).strip()
-        target = _decode_duckduckgo_href(_html.unescape(href)).strip()
-        text = ""
-        if idx < len(snippets):
-            text = _html.unescape(_strip_tags(snippets[idx])).strip()
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        target = str(item.get("href") or "").strip()
+        text_field = str(item.get("body") or "").strip()
         if not title or not target:
             continue
-        out.append(SearchResult(result_id=result_id, title=title, url=target, text=text))
+        out.append(
+            SearchResult(
+                result_id=len(out) + 1,
+                title=title,
+                url=target,
+                text=text_field,
+            )
+        )
         if len(out) >= limit:
             break
 
     return out
+
+
+def _read_brave_api_key() -> str | None:
+    return os.environ.get(BRAVE_API_KEY_ENV_VAR, "").strip() or None
+
+
+def _brave_search(
+    query: str,
+    limit: int,
+    *,
+    api_key: str,
+    timeout: float = _DEFAULT_BRAVE_TIMEOUT,
+) -> list[SearchResult]:
+    """Query Brave's official Web Search API."""
+    full_url = f"{_BRAVE_SEARCH_URL}?{urlencode([('q', query), ('count', str(limit))])}"
+    req = Request(
+        full_url,
+        headers={
+            "Accept": "application/json",
+            "X-Subscription-Token": api_key,
+        },
+    )
+
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403, 429):
+            raise SearchBackendBlocked(
+                f"Brave refused the request (HTTP {exc.code})"
+            ) from exc
+        raise SearchBackendUnavailable(f"Brave returned HTTP {exc.code}") from exc
+    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
+        raise SearchBackendUnavailable("Brave unreachable") from exc
+
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as exc:
+        raise SearchBackendUnavailable("Brave did not return JSON") from exc
+
+    if not isinstance(payload, dict):
+        raise SearchBackendUnavailable("Brave JSON payload was not an object")
+
+    web = payload.get("web")
+    raw_results = web.get("results") if isinstance(web, dict) else []
+    if raw_results is None:
+        raw_results = []
+    if not isinstance(raw_results, list):
+        raise SearchBackendUnavailable("Brave 'web.results' field was not a list")
+
+    out: list[SearchResult] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        target = str(item.get("url") or "").strip()
+        text_field = str(item.get("description") or "").strip()
+        if not title or not target:
+            continue
+        out.append(
+            SearchResult(
+                result_id=len(out) + 1,
+                title=title,
+                url=target,
+                text=text_field,
+            )
+        )
+        if len(out) >= limit:
+            break
+
+    return out
+
+
+def _with_brave_fallback(
+    primary: Callable[[], list[SearchResult]],
+    query: str,
+    limit: int,
+) -> list[SearchResult]:
+    """Wrap a DDGS-backed search call with a keyed Brave fallback.
+
+    Brave is only ever consulted when BRAVE_SEARCH_API_KEY is present, and
+    only when the primary (DDGS) call errors or returns no results.
+    """
+    api_key = _read_brave_api_key()
+
+    try:
+        results = primary()
+    except SearchBackendError as primary_exc:
+        if not api_key:
+            raise
+        try:
+            return _brave_search(query, limit, api_key=api_key)
+        except SearchBackendError as brave_exc:
+            raise SearchBackendUnavailable(
+                f"ddgs failed ({type(primary_exc).__name__}); "
+                f"brave failed ({type(brave_exc).__name__})"
+            ) from primary_exc
+
+    if results or not api_key:
+        return results
+
+    return _brave_search(query, limit, api_key=api_key)
 
 
 def _normalize_engines(engines: Any) -> str:
@@ -309,10 +395,10 @@ def _searxng_search(
 
 
 def _load_search_config() -> dict[str, Any]:
-    # Lazy import to avoid a circular dependency with research_config_service.
-    from services.research_config_service import load_research_config
+    # Lazy import to avoid a circular dependency with tinysearch_config_service.
+    from tinysearch.services.tinysearch_config_service import load_tinysearch_config
 
-    return load_research_config()
+    return load_tinysearch_config()
 
 
 def _dispatch_search(
@@ -332,9 +418,30 @@ def _dispatch_search(
         or ""
     )
     fallback_enabled = bool(config.get("search_backend_fallback", True))
+    ddgs_backend = str(config.get("ddgs_backend") or DEFAULT_DDGS_BACKEND)
+    ddgs_timeout = float(config.get("ddgs_timeout_seconds") or _DEFAULT_DDGS_TIMEOUT)
+
+    if backend == "ddgs":
+        return _with_brave_fallback(
+            lambda: _ddgs_search(
+                query,
+                limit,
+                region=str(region) or None,
+                backend=ddgs_backend,
+                timeout=ddgs_timeout,
+            ),
+            query,
+            limit,
+        )
 
     if backend == "duckduckgo":
-        return _duckduckgo_search(query, limit)
+        return _with_brave_fallback(
+            lambda: _ddgs_search(
+                query, limit, region=str(region) or None, backend="duckduckgo", timeout=ddgs_timeout
+            ),
+            query,
+            limit,
+        )
 
     if backend == "auto":
         try:
@@ -342,7 +449,9 @@ def _dispatch_search(
                 query, limit, url=url, engines=engines, region=str(region) or None
             )
         except SearchBackendError:
-            return _duckduckgo_search(query, limit)
+            return _ddgs_search(
+                query, limit, region=str(region) or None, backend="duckduckgo", timeout=ddgs_timeout
+            )
 
     # backend == "searxng"
     try:
@@ -351,11 +460,18 @@ def _dispatch_search(
         )
     except SearchBackendError:
         if fallback_enabled:
-            return _duckduckgo_search(query, limit)
+            return _ddgs_search(
+                query, limit, region=str(region) or None, backend="duckduckgo", timeout=ddgs_timeout
+            )
         raise
 
 
-def search(query: str, limit: int = 10) -> list[SearchResult]:
+def search(
+    query: str,
+    limit: int = 10,
+    *,
+    config: dict[str, Any] | None = None,
+) -> list[SearchResult]:
     """
     Run a web search using the configured backend.
 
@@ -364,8 +480,8 @@ def search(query: str, limit: int = 10) -> list[SearchResult]:
       URL:
       Text:
     """
-    config = _load_search_config()
-    return _dispatch_search(query, limit, config=config)
+    resolved_config = _load_search_config() if config is None else config
+    return _dispatch_search(query, limit, config=resolved_config)
 
 
 def search_to_markdown(search_results: list[SearchResult]) -> str:

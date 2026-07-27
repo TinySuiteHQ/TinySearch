@@ -5,13 +5,20 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      run_live_search_tests:
+        description: "Run opt-in tests against the live DDGS search backend"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
-  tests:
-    name: Unit tests
+  core-boundary:
+    name: Core package boundary
     runs-on: ubuntu-latest
 
     steps:
@@ -24,13 +31,119 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Install dependencies
+      - name: Install the base package
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install .
 
-      - name: Run tests
+      - name: Verify core imports without declared server dependencies
+        run: |
+          python -c "import tinysearch; from tinysearch import TinySearchConfig, to_prompt"
+          python -c "import importlib.metadata as m; r=m.requires('tinysuite-search') or []; assert not any(x.lower().startswith(('fastapi','uvicorn','mcp')) and 'extra ==' not in x.lower() for x in r)"
+
+      - name: Run core contract tests
+        run: python -m unittest tests.test_core tests.test_public_config_and_results tests.test_research_pipeline tests.test_scrape_pipeline tests.test_grounded_prompt_service
+
+  platform-tests:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+        python-version:
+          - "3.12"
+          - "3.13"
+          - "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package with server extra
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[server]"
+
+      - name: Run full test suite
         run: python -m unittest discover tests
+
+      - name: Smoke-test MCP over stdio
+        run: python scripts/smoke_mcp_stdio.py
+
+  package:
+    name: Build and install distributions
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Check release metadata
+        run: python scripts/check_release_metadata.py
+
+      - name: Build wheel and source distribution
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+
+      - name: Install wheel with server extra into a fresh environment
+        run: |
+          python -m venv "${RUNNER_TEMP}/tinysearch-wheel"
+          WHEEL="$(find "${GITHUB_WORKSPACE}/dist" -name '*.whl' -print -quit)"
+          "${RUNNER_TEMP}/tinysearch-wheel/bin/python" -m pip install "${WHEEL}[server]"
+
+      - name: Verify installed wheel away from the checkout
+        working-directory: ${{ runner.temp }}
+        run: |
+          "${RUNNER_TEMP}/tinysearch-wheel/bin/python" -c "import importlib.metadata as m, json, os, tinysearch, tomllib; expected=tomllib.load(open(os.path.join(os.environ['GITHUB_WORKSPACE'], 'pyproject.toml'), 'rb'))['project']['version']; assert m.version('tinysuite-search') == expected; json.dumps(tinysearch.TinySearchConfig().to_dict())"
+          "${RUNNER_TEMP}/tinysearch-wheel/bin/python" "${GITHUB_WORKSPACE}/scripts/smoke_mcp_stdio.py"
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-package-distributions
+          path: dist/
+          if-no-files-found: error
+
+  live-search-tests:
+    name: Live DDGS search
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_search_tests }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the base package
+        run: python -m pip install .
+
+      - name: Run live search tests
+        env:
+          TINYSEARCH_RUN_LIVE_TESTS: "1"
+        run: python -m unittest tests.test_live_search
 
   docker-build:
     name: Docker build smoke test
@@ -47,8 +160,11 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          target: mcp
+          load: true
           push: false
           tags: tinysearch:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      - name: Smoke-test image entrypoint
+        run: docker run --rm tinysearch:test tinysearch --help

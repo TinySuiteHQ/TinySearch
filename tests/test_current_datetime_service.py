@@ -5,7 +5,7 @@ import unittest
 from datetime import UTC, datetime
 from unittest.mock import patch
 
-from services.current_datetime_service import current_datetime_payload
+from tinysearch.services.current_datetime_service import current_datetime_payload
 
 
 class CurrentDatetimeServiceTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class CurrentDatetimeServiceTests(unittest.TestCase):
 
     def test_payload_uses_iso_formats(self) -> None:
         fixed = datetime(2026, 6, 28, 8, 10, 0, tzinfo=UTC)
-        with patch("services.current_datetime_service.datetime") as mock_datetime:
+        with patch("tinysearch.services.current_datetime_service.datetime") as mock_datetime:
             mock_datetime.now.return_value = fixed
             payload = current_datetime_payload()
 

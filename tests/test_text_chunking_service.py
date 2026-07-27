@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from services.text_chunking_service import _parse_markdown_heading, chunk_text, truncate_text_to_max_tokens
+from tinysearch.services.text_chunking_service import _parse_markdown_heading, chunk_text, truncate_text_to_max_tokens
 
 
 class TruncateTextToMaxTokensTests(unittest.TestCase):

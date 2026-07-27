@@ -4,7 +4,7 @@ import socket
 import unittest
 from unittest.mock import patch
 
-from services.url_safety_service import (
+from tinysearch.services.url_safety_service import (
     BlockedUrlError,
     InvalidUrlError,
     assert_url_is_fetchable,
@@ -92,7 +92,7 @@ class ValidatePublicUrlTests(unittest.TestCase):
 class ResolveAndCheckPublicTests(unittest.TestCase):
     def test_accepts_public_ipv4(self) -> None:
         with patch(
-            "services.url_safety_service.socket.getaddrinfo",
+            "tinysearch.services.url_safety_service.socket.getaddrinfo",
             return_value=[_addrinfo("93.184.216.34")],
         ):
             self.assertEqual(
@@ -102,7 +102,7 @@ class ResolveAndCheckPublicTests(unittest.TestCase):
 
     def test_rejects_when_any_resolved_address_is_private(self) -> None:
         with patch(
-            "services.url_safety_service.socket.getaddrinfo",
+            "tinysearch.services.url_safety_service.socket.getaddrinfo",
             return_value=[
                 _addrinfo("93.184.216.34"),
                 _addrinfo("10.0.0.1"),
@@ -113,7 +113,7 @@ class ResolveAndCheckPublicTests(unittest.TestCase):
 
     def test_rejects_when_resolved_to_loopback_only(self) -> None:
         with patch(
-            "services.url_safety_service.socket.getaddrinfo",
+            "tinysearch.services.url_safety_service.socket.getaddrinfo",
             return_value=[_addrinfo("127.0.0.1")],
         ):
             with self.assertRaises(BlockedUrlError):
@@ -121,7 +121,7 @@ class ResolveAndCheckPublicTests(unittest.TestCase):
 
     def test_propagates_dns_failure_as_invalid_url(self) -> None:
         with patch(
-            "services.url_safety_service.socket.getaddrinfo",
+            "tinysearch.services.url_safety_service.socket.getaddrinfo",
             side_effect=socket.gaierror("not found"),
         ):
             with self.assertRaises(InvalidUrlError):
@@ -153,7 +153,7 @@ class EnforceBlockedDomainsTests(unittest.TestCase):
 class AssertUrlIsFetchableTests(unittest.TestCase):
     def test_happy_path_with_public_dns(self) -> None:
         with patch(
-            "services.url_safety_service.socket.getaddrinfo",
+            "tinysearch.services.url_safety_service.socket.getaddrinfo",
             return_value=[_addrinfo("93.184.216.34")],
         ):
             self.assertEqual(
@@ -166,7 +166,7 @@ class AssertUrlIsFetchableTests(unittest.TestCase):
 
     def test_blocked_domain_short_circuits_before_dns(self) -> None:
         with patch(
-            "services.url_safety_service.socket.getaddrinfo"
+            "tinysearch.services.url_safety_service.socket.getaddrinfo"
         ) as getaddrinfo:
             with self.assertRaises(BlockedUrlError):
                 assert_url_is_fetchable(
@@ -181,7 +181,7 @@ class AssertUrlIsFetchableTests(unittest.TestCase):
 
     def test_private_resolved_address_is_blocked(self) -> None:
         with patch(
-            "services.url_safety_service.socket.getaddrinfo",
+            "tinysearch.services.url_safety_service.socket.getaddrinfo",
             return_value=[_addrinfo("10.0.0.1")],
         ):
             with self.assertRaises(BlockedUrlError):
@@ -192,7 +192,7 @@ class AssertUrlIsFetchableTests(unittest.TestCase):
 
     def test_ip_literal_skips_dns_resolution(self) -> None:
         with patch(
-            "services.url_safety_service.socket.getaddrinfo"
+            "tinysearch.services.url_safety_service.socket.getaddrinfo"
         ) as getaddrinfo:
             self.assertEqual(
                 assert_url_is_fetchable(

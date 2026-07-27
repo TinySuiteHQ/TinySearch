@@ -1,13 +1,16 @@
 name: Publish to MCP Registry
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Version tag to publish, for example v0.4.0"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
-        description: "Version tag to (re)publish, for example v0.3.2"
+        description: "Version tag to (re)publish, for example v0.4.0"
         required: true
         type: string
 
@@ -19,21 +22,30 @@ jobs:
       contents: read
 
     steps:
-      - name: Check out repository
+      - name: Check out release tag
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
 
-      - name: Set version in server.json
+      - name: Set version in server.json by registry type
+        env:
+          TAG: ${{ inputs.tag }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG=${GITHUB_REF#refs/tags/}
-          fi
-          VERSION=${TAG#v}
-          jq --arg v "$VERSION" --arg tag "$TAG" \
-            '.version = $v | .packages[0].identifier = ("docker.io/marcellm01/tinysearch:" + $tag)' \
-            server.json > server.tmp
+          VERSION="${TAG#v}"
+          jq --arg v "$VERSION" --arg tag "$TAG" '
+            if ([.packages[] | select(.registryType == "oci")] | length) != 1 then
+              error("server.json must contain exactly one OCI package")
+            elif ([.packages[] | select(.registryType == "pypi")] | length) != 1 then
+              error("server.json must contain exactly one PyPI package")
+            else
+              .version = $v
+              | (.packages[] | select(.registryType == "oci") | .identifier) =
+                  ("docker.io/marcellm01/tinysearch:" + $tag)
+              | (.packages[] | select(.registryType == "pypi") | .version) = $v
+            end
+          ' server.json > server.tmp
           mv server.tmp server.json
+          python scripts/check_release_metadata.py --expected-version "$VERSION"
 
       - name: Install mcp-publisher
         run: |

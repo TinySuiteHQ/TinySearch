@@ -15,7 +15,7 @@ start than loading PyTorch through `SentenceTransformer`.
 
 ## Automatic download
 
-When `embedding_backend` in `configs/research_config.json` is `onnx` and
+When `embedding_backend` in `configs/tinysearch_config.json` is `onnx` and
 `embedding_model` is `fast`, starting **`servers/mcp_server.py`** or
 **`servers/fastapi_server.py`** downloads the bundle once from Hugging Face
 (`onnx-models/all-MiniLM-L6-v2-onnx`) into the default bundle directory above.

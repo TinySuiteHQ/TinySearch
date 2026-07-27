@@ -1,8 +1,7 @@
 services:
-  mcp:
+  tinysearch:
     build:
       context: .
-      target: mcp
       args:
         TINYSEARCH_VERSION: local
     image: tinysearch:local
@@ -11,10 +10,10 @@ services:
     shm_size: "1gb"
     volumes:
       - tinysearch-models:/data/models
-      - ./configs/research_config.json:/config/research_config.json:ro
+      - ./configs:/config:ro
     environment:
       TINYSEARCH_MODELS_DIR: /data/models
-      TINYSEARCH_CONFIG_PATH: /config/research_config.json
+      TINYSEARCH_CONFIG_PATH: /config/tinysearch_config.json
       MCP_TRANSPORT: streamable-http
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
@@ -25,10 +24,18 @@ services:
   fastapi:
     build:
       context: .
-      target: fastapi
       args:
         TINYSEARCH_VERSION: local
-    image: tinysearch-fastapi:local
+    image: tinysearch:local
+    command:
+      [
+        "uvicorn",
+        "tinysearch.servers.fastapi_server:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
     profiles:
       - fastapi
     ports:
@@ -36,10 +43,10 @@ services:
     shm_size: "1gb"
     volumes:
       - tinysearch-models:/data/models
-      - ./configs/research_config.json:/config/research_config.json:ro
+      - ./configs:/config
     environment:
       TINYSEARCH_MODELS_DIR: /data/models
-      TINYSEARCH_CONFIG_PATH: /config/research_config.json
+      TINYSEARCH_CONFIG_PATH: /config/tinysearch_config.json
       SEARXNG_URL: http://searxng:8080/search
     depends_on:
       - searxng

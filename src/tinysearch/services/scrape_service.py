@@ -1,10 +1,4 @@
-"""Single-URL scrape orchestrator backing /scrape and the MCP scrape_url tool.
-
-Implements upstream issue #10: validate the URL, fetch it through the existing
-Crawl4AI path or the bundled PDF/DOCX extractor, chunk and rank the extracted
-markdown against the caller's query, select chunks under a token budget, and
-return a grounded answer prompt plus token accounting.
-"""
+"""Shared result types, errors, and extraction helpers for URL scraping."""
 
 from __future__ import annotations
 
@@ -12,30 +6,18 @@ import asyncio
 import socket
 import urllib.error
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urlsplit
 
-from services.grounded_prompt_service import format_url_grounded_prompt
-from services.site_crawl_service import (
-    _extract_document_text,
-    _is_document_url,
-    _url_path_suffix,
-    fetch_html_for_query,
-    rank_chunks_bm25,
-)
-from services.text_chunking_service import chunk_text
-from services.token_counter_service import (
+from tinysearch.services.token_counter_service import (
     decode_tokens,
     encode_tokens,
-    token_count,
 )
-from services.url_safety_service import (
+from tinysearch.services.url_safety_service import (
     BlockedUrlError,
     InvalidUrlError,
-    assert_url_is_fetchable,
 )
 
 
@@ -74,12 +56,11 @@ SCRAPE_ERROR_MAP: dict[type, tuple[str, int]] = {
 
 @dataclass(frozen=True)
 class ScrapeResult:
-    answer: str
     url: str
     title: str
     query: str
+    chunks: list[dict[str, Any]]
     content_tokens: int
-    answer_tokens: int
     truncated: bool
     retrieved_at: str
     metadata: dict[str, str | None] | None = None
@@ -131,7 +112,7 @@ def _parse_html_meta_and_title(html: str) -> tuple[dict[str, str], str]:
     return parser.meta, title
 
 
-def _scan_html_meta(html: str) -> dict[str, str]:
+def scan_html_meta(html: str) -> dict[str, str]:
     meta, _ = _parse_html_meta_and_title(html)
     return meta
 
@@ -144,7 +125,7 @@ def _coerce_str(value: Any) -> str:
     return str(value).strip()
 
 
-def _extract_title(crawl_metadata: dict[str, Any], html: str) -> str:
+def extract_title(crawl_metadata: dict[str, Any], html: str) -> str:
     title = _coerce_str(crawl_metadata.get("title"))
     if title:
         return title
@@ -152,10 +133,10 @@ def _extract_title(crawl_metadata: dict[str, Any], html: str) -> str:
     return html_title
 
 
-def _extract_metadata(
+def extract_metadata(
     crawl_metadata: dict[str, Any], html: str
 ) -> dict[str, str | None]:
-    html_meta = _scan_html_meta(html)
+    html_meta = scan_html_meta(html)
 
     def _pick(*keys: str) -> str | None:
         for key in keys:
@@ -179,12 +160,12 @@ def _extract_metadata(
     }
 
 
-def _utc_iso8601_z(now: datetime | None = None) -> str:
+def utc_iso8601_z(now: datetime | None = None) -> str:
     moment = now or datetime.now(UTC)
     return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _select_chunks_under_budget(
+def select_chunks_under_budget(
     ranked: list[dict[str, Any]],
     max_tokens: int,
     tokenizer: str,
@@ -215,7 +196,7 @@ HtmlCrawlFn = Callable[..., Awaitable[dict[str, Any]]]
 DocumentExtractFn = Callable[[str], tuple[str, str]]
 
 
-async def _fetch_html_with_timeout(
+async def fetch_html_with_timeout(
     *,
     url: str,
     query: str,
@@ -240,7 +221,7 @@ async def _fetch_html_with_timeout(
         raise FetchFailedError(f"fetch failed: {exc}") from exc
 
 
-async def _extract_document_with_timeout(
+async def extract_document_with_timeout(
     *,
     url: str,
     timeout_seconds: float,
@@ -259,125 +240,3 @@ async def _extract_document_with_timeout(
         raise FetchFailedError(f"download failed: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
         raise FetchFailedError(f"document extraction failed: {exc}") from exc
-
-
-async def scrape_url(
-    url: str,
-    query: str,
-    *,
-    max_tokens: int = DEFAULT_SCRAPE_MAX_TOKENS,
-    include_metadata: bool = True,
-    config: dict[str, Any],
-    tokenizer_name: str,
-    crawl_fn: HtmlCrawlFn | None = None,
-    document_fn: DocumentExtractFn | None = None,
-) -> ScrapeResult:
-    """Inspect a single URL and return a grounded answer prompt for `query`.
-
-    `config` carries the research-config values we need (blocked_domains,
-    crawl/chunk parameters, pipeline_timeout_seconds). `tokenizer_name` is
-    resolved by the caller via `research_tokenizer_name(config)` so we do not
-    have to import the embedding stack here.
-    """
-    cleaned_query = (query or "").strip()
-    if not cleaned_query:
-        raise ValueError("query must not be empty")
-    if max_tokens <= 0:
-        raise ValueError("max_tokens must be positive")
-
-    blocked_domains = config.get("blocked_domains") or []
-    safe_url = assert_url_is_fetchable(url, blocked_domains)
-
-    timeout_seconds = float(config.get("pipeline_timeout_seconds") or 120.0)
-    max_chunk_tokens = int(config.get("crawl_max_chunk_tokens") or 500)
-    overlap_tokens = int(config.get("crawl_overlap_tokens") or 80)
-    bm25_threshold = float(config.get("crawl_bm25_threshold") or 1.5)
-    bm25_language = str(config.get("crawl_bm25_language") or "english")
-
-    is_document = _is_document_url(safe_url)
-    final_url = safe_url
-    markdown = ""
-    html = ""
-    crawl_metadata: dict[str, Any] = {}
-
-    if is_document:
-        suffix = _url_path_suffix(safe_url)
-        if suffix == "doc":
-            raise UnsupportedDocumentError(
-                "legacy .doc files are not supported; use PDF or DOCX"
-            )
-        document_fn = document_fn or _extract_document_text
-        markdown, _document_type = await _extract_document_with_timeout(
-            url=safe_url,
-            timeout_seconds=timeout_seconds,
-            document_fn=document_fn,
-        )
-    else:
-        crawl_fn = crawl_fn or fetch_html_for_query
-        page = await _fetch_html_with_timeout(
-            url=safe_url,
-            query=cleaned_query,
-            bm25_threshold=bm25_threshold,
-            bm25_language=bm25_language,
-            timeout_seconds=timeout_seconds,
-            crawl_fn=crawl_fn,
-        )
-        final_url = str(page.get("final_url") or safe_url)
-        html = str(page.get("html") or "")
-        crawl_metadata = page.get("metadata") or {}
-        if final_url != safe_url:
-            final_url = assert_url_is_fetchable(final_url, blocked_domains)
-        markdown_raw = str(page.get("markdown_raw") or "")
-        markdown_fit = str(page.get("markdown_fit") or "")
-        markdown = markdown_fit or markdown_raw
-
-    if not markdown or not markdown.strip():
-        raise EmptyContentError(f"no readable content extracted from {final_url}")
-
-    chunks = chunk_text(
-        text=markdown,
-        max_chunk_tokens=max_chunk_tokens,
-        overlap_tokens=overlap_tokens,
-        encoding_name=tokenizer_name,
-    )
-    if not chunks:
-        raise EmptyContentError(f"no chunks produced from {final_url}")
-
-    ranked = rank_chunks_bm25(query=cleaned_query, chunks=chunks, top_k=len(chunks))
-    if not ranked:
-        ranked = chunks
-
-    selected, content_tokens, truncated = _select_chunks_under_budget(
-        ranked, max_tokens, tokenizer_name
-    )
-    if not selected:
-        raise EmptyContentError(f"no chunk fit the max_tokens budget for {final_url}")
-
-    title = "" if is_document else _extract_title(crawl_metadata, html)
-    metadata: dict[str, str | None] | None
-    if not include_metadata:
-        metadata = None
-    elif is_document:
-        metadata = {"description": None, "author": None, "published_date": None}
-    else:
-        metadata = _extract_metadata(crawl_metadata, html)
-
-    answer = format_url_grounded_prompt(
-        question=cleaned_query,
-        url=final_url,
-        title=title,
-        ranked_chunks=selected,
-    )
-    answer_tokens = token_count(answer, tokenizer_name)
-
-    return ScrapeResult(
-        answer=answer,
-        url=final_url,
-        title=title,
-        query=cleaned_query,
-        content_tokens=content_tokens,
-        answer_tokens=answer_tokens,
-        truncated=truncated,
-        retrieved_at=_utc_iso8601_z(),
-        metadata=metadata,
-    )

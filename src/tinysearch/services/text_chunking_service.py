@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from services.token_counter_service import resolve_tokenizer
+from tinysearch.services.token_counter_service import resolve_tokenizer
 
 
 def truncate_text_to_max_tokens(

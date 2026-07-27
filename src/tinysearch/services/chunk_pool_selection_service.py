@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-from services.hybrid_embed_search_service import tokenize_for_retrieval
+from tinysearch.services.hybrid_embed_search_service import tokenize_for_retrieval
 
 
 def jaccard_similarity_tokens(a: frozenset[str], b: frozenset[str]) -> float:

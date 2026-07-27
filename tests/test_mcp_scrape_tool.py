@@ -4,28 +4,31 @@ import unittest
 from inspect import signature
 from unittest.mock import AsyncMock, patch
 
-from servers.mcp_server import scrape_url_tool
-from services.scrape_service import (
+from tinysearch.servers.mcp_server import research, scrape_url_tool
+from tinysearch.services.scrape_service import (
     EmptyContentError,
     FetchFailedError,
     FetchTimeoutError,
-    ScrapeResult,
     UnsupportedDocumentError,
 )
-from services.url_safety_service import BlockedUrlError, InvalidUrlError
+from tinysearch.services.url_safety_service import BlockedUrlError, InvalidUrlError
+from tinysearch.results import result_envelope
 
 
-def _result() -> ScrapeResult:
-    return ScrapeResult(
-        answer="URL-GROUNDED ANSWER PROMPT...",
-        url="https://example.com/x",
-        title="Title",
+def _result() -> dict:
+    return result_envelope(
+        operation="scrape",
+        status="ok",
         query="q",
-        content_tokens=42,
-        answer_tokens=123,
-        truncated=False,
         retrieved_at="2026-06-12T10:30:00Z",
-        metadata={"description": "d", "author": None, "published_date": None},
+        sources=[{
+            "id": "1",
+            "url": "https://example.com/x",
+            "title": "Title",
+            "metadata": {},
+            "chunks": [{"id": "1", "text": "Evidence.", "tokens": 2, "rank": 1, "scores": {}}],
+        }],
+        stats={"content_tokens": 42, "truncated": False},
     )
 
 
@@ -35,7 +38,10 @@ def _fn(coro):
 
 
 class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
-    def test_mcp_signature_exposes_only_url_and_query(self) -> None:
+    def test_research_signature_only_exposes_query(self) -> None:
+        self.assertEqual(list(signature(_fn(research)).parameters), ["query"])
+
+    def test_mcp_signature_only_exposes_url_and_query(self) -> None:
         self.assertEqual(
             list(signature(_fn(scrape_url_tool)).parameters),
             ["url", "query"],
@@ -43,36 +49,30 @@ class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_answer_and_diagnostics(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())
-        with patch("servers.mcp_server.scrape_url", scrape_mock), patch(
-            "servers.mcp_server._ensure_local_bundle_for_config"
-        ):
+        with patch("tinysearch.core.scrape_url", scrape_mock):
             payload = await _fn(scrape_url_tool)(
                 "https://example.com/x", "q"
             )
 
-        self.assertEqual(payload["answer"], "URL-GROUNDED ANSWER PROMPT...")
+        self.assertIn("URL-GROUNDED ANSWER PROMPT", payload["answer"])
         self.assertEqual(payload["url"], "https://example.com/x")
         self.assertEqual(payload["title"], "Title")
         self.assertEqual(payload["content_tokens"], 42)
-        self.assertEqual(payload["answer_tokens"], 123)
+        self.assertGreater(payload["answer_tokens"], 0)
         self.assertFalse(payload["truncated"])
         self.assertEqual(payload["retrieved_at"], "2026-06-12T10:30:00Z")
         self.assertNotIn("metadata", payload)
 
     async def test_default_max_tokens_passed_through(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())
-        with patch("servers.mcp_server.scrape_url", scrape_mock), patch(
-            "servers.mcp_server._ensure_local_bundle_for_config"
-        ):
+        with patch("tinysearch.core.scrape_url", scrape_mock):
             await _fn(scrape_url_tool)("https://example.com/x", "q")
 
         self.assertEqual(scrape_mock.await_args.kwargs["max_tokens"], 4000)
 
     async def _run_with_exc(self, exc: Exception) -> ValueError:
         scrape_mock = AsyncMock(side_effect=exc)
-        with patch("servers.mcp_server.scrape_url", scrape_mock), patch(
-            "servers.mcp_server._ensure_local_bundle_for_config"
-        ):
+        with patch("tinysearch.core.scrape_url", scrape_mock):
             try:
                 await _fn(scrape_url_tool)("https://example.com/x", "q")
             except ValueError as raised:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from services.chunk_pool_selection_service import (
+from tinysearch.services.chunk_pool_selection_service import (
     dedupe_chunks_by_token_jaccard,
     jaccard_similarity_tokens,
     select_chunks_with_quota_and_fill,

@@ -5,11 +5,15 @@
 .mypy_cache/
 .ruff_cache/
 .venv/
+.venv*/
 venv/
 __pycache__/
 *.py[cod]
 .coverage
 htmlcov/
+build/
+dist/
+*.egg-info/
 .DS_Store
 .env
 .env.*

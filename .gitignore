@@ -8,6 +8,7 @@ __pycache__/
 .ruff_cache/
 venv/
 .venv/
+.venv312/
 
 # Local model bundles. These can be large and are downloaded/exported on demand.
 models/*
@@ -18,3 +19,8 @@ models/*
 
 # Local CLI helpers
 *.local.py
+
+# Python packaging artifacts
+*.egg-info/
+dist/
+build/

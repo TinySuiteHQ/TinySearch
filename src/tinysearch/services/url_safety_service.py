@@ -19,7 +19,7 @@ from collections.abc import Iterable
 from ipaddress import AddressValueError, ip_address
 from urllib.parse import urlsplit
 
-from services.web_search_service import is_blocked_domain
+from tinysearch.services.web_search_service import is_blocked_domain
 
 
 _ALLOWED_SCHEMES = frozenset({"http", "https"})

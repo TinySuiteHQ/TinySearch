@@ -12,7 +12,7 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
-from services.embedding_service import (
+from tinysearch.services.embedding_service import (
     _onnx_bundle_ready,
     clear_onnx_runtime_cache,
     resolve_local_embedding_model_spec,
