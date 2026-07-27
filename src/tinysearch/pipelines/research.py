@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import re
 import sys
@@ -22,7 +23,7 @@ from tinysearch.services.embedding_service import (
 from tinysearch.services.chunk_pool_selection_service import select_chunks_with_quota_and_fill
 from tinysearch.services.hybrid_embed_search_service import EmbeddingFn, rank_chunks_hybrid
 from tinysearch.results import public_chunk, result_envelope
-from tinysearch.services.site_crawl_service import crawl
+from tinysearch.services.site_crawl_service import create_browser_crawler, crawl
 from tinysearch.services.text_chunking_service import chunk_text, truncate_text_to_max_tokens
 from tinysearch.services.web_search_service import (
     SearchBackendError,
@@ -355,8 +356,11 @@ async def run_research_pipeline(
             await emit("search_ranked", kept_results=len(ranked_search_chunks))
 
             crawl_semaphore = asyncio.Semaphore(max(1, max_concurrent_crawls))
+            using_default_crawl_fn = crawl_fn is crawl
 
-            async def crawl_result(search_doc: dict[str, Any]) -> dict[str, Any]:
+            async def crawl_result(
+                search_doc: dict[str, Any], *, shared_crawler: Any | None
+            ) -> dict[str, Any]:
                 url = str(search_doc["url"])
                 async with crawl_semaphore:
                     await emit("crawl_start", url=url)
@@ -370,6 +374,7 @@ async def run_research_pipeline(
                             bm25_threshold=crawl_bm25_threshold,
                             bm25_language=crawl_bm25_language,
                             pruning_threshold=crawl_pruning_threshold,
+                            crawler=shared_crawler,
                         )
                     except Exception as exc:
                         error = f"{url}: {exc}"
@@ -414,9 +419,16 @@ async def run_research_pipeline(
                         "crawl_error": None,
                     }
 
-            crawled_results = await asyncio.gather(
-                *(crawl_result(search_doc) for search_doc in ranked_search_chunks)
+            crawler_ctx = (
+                create_browser_crawler() if using_default_crawl_fn else contextlib.nullcontext(None)
             )
+            async with crawler_ctx as shared_crawler:
+                crawled_results = await asyncio.gather(
+                    *(
+                        crawl_result(search_doc, shared_crawler=shared_crawler)
+                        for search_doc in ranked_search_chunks
+                    )
+                )
             chunk_pool = [
                 chunk
                 for result in crawled_results

@@ -142,6 +142,38 @@ def _crawler_config_for_fit_markdown(
     )
 
 
+def _lightweight_browser_config(BrowserConfig: Any) -> Any:
+    """BrowserConfig tuned to cut Chromium's memory/process footprint.
+
+    Deliberately does NOT touch `java_script_enabled` or disable JS in any way,
+    since that would break markdown extraction quality on JS-rendered pages.
+    Only non-content-affecting knobs:
+    - light_mode: drops crashpad/extensions/sync/translate companion processes
+    - memory_saving_mode: caps each renderer's V8 heap (~512MB) and discards
+      caches aggressively
+    - avoid_ads: blocks known ad/tracker network origins
+    - extra_args: blocks images/fonts at the browser level; we only need text.
+    """
+    return BrowserConfig(
+        verbose=False,
+        light_mode=True,
+        memory_saving_mode=True,
+        avoid_ads=True,
+        extra_args=["--blink-settings=imagesEnabled=false", "--disable-remote-fonts"],
+    )
+
+
+def create_browser_crawler() -> Any:
+    """Construct an AsyncWebCrawler meant to be reused across many crawl() calls.
+
+    Launching a fresh Chromium browser per crawled URL is the dominant memory
+    cost under concurrent crawling; sharing one browser instance across a
+    batch cuts peak memory substantially while preserving full JS rendering.
+    """
+    AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
+    return AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig))
+
+
 def url_path_suffix(url: str) -> str:
     return urlparse(url).path.lower().rsplit(".", 1)[-1] if "." in urlparse(url).path else ""
 
@@ -258,6 +290,7 @@ async def crawl(
     bm25_threshold: float = 1.5,
     bm25_language: str = "english",
     pruning_threshold: float = 0.48,
+    crawler: Any | None = None,
 ) -> dict:
     """
     Crawl a URL (no internal search).
@@ -265,6 +298,9 @@ async def crawl(
     Returns url, html, markdown_raw (unfiltered), markdown (chosen for chunking),
     markdown_fit (filtered markdown when a content filter ran, else empty),
     markdown_source ('fit' or 'raw'), tokens_raw.
+
+    Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
+    to reuse one browser across many calls instead of launching a fresh one here.
     """
     _ensure_utf8_stdio()
 
@@ -278,8 +314,11 @@ async def crawl(
         pruning_threshold=pruning_threshold,
     )
 
-    async with AsyncWebCrawler(config=BrowserConfig(verbose=False)) as crawler:
+    if crawler is not None:
         result = await crawler.arun(url=url, config=run_config)
+    else:
+        async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
+            result = await owned_crawler.arun(url=url, config=run_config)
 
     html = _get_html(result)
     markdown_raw = _get_markdown_raw(result)
@@ -345,7 +384,7 @@ async def fetch_html_for_query(
         ),
     )
 
-    async with AsyncWebCrawler(config=BrowserConfig(verbose=False)) as crawler:
+    async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as crawler:
         result = await crawler.arun(url=url, config=config)
 
     final_url = (
