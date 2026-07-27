@@ -128,8 +128,26 @@ ahead of time:
 uvx --from "tinysuite-search[server]" tinysearch setup
 ```
 
+<p align="center">
+  <img src="assets/demo_terminal_prompt.gif" alt="TinySearch CLI setup and first run in a terminal" width="780" />
+</p>
+
 Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 [installation guide](https://tinysuite.dev/docs/tinysearch/).
+
+## Three focused tools
+
+| Tool | Use it when |
+| --- | --- |
+| `research(query)` | The agent needs to discover and compare relevant sources |
+| `scrape_url(url, query)` | You already know which page should be inspected |
+| `get_current_datetime()` | Research depends on the current date or time |
+
+TinySearch deliberately stays focused. It is a retrieval layer, not another
+agent, chat interface, hosted search product, or permanent web index.
+
+See the complete [MCP tool reference](https://tinysuite.dev/docs/tinysearch/mcp-tools/)
+for parameters and response contracts.
 
 ## What your agent gets
 
@@ -174,20 +192,6 @@ An abridged structured result looks like this:
 MCP tools return the same evidence as a grounded prompt by default, ready for
 the client model to use. Pass `output_format: "json"` when you want the
 structured result directly.
-
-## Three focused tools
-
-| Tool | Use it when |
-| --- | --- |
-| `research(query)` | The agent needs to discover and compare relevant sources |
-| `scrape_url(url, query)` | You already know which page should be inspected |
-| `get_current_datetime()` | Research depends on the current date or time |
-
-TinySearch deliberately stays focused. It is a retrieval layer, not another
-agent, chat interface, hosted search product, or permanent web index.
-
-See the complete [MCP tool reference](https://tinysuite.dev/docs/tinysearch/mcp-tools/)
-for parameters and response contracts.
 
 ## How it works
 
