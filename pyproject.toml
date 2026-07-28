@@ -40,8 +40,8 @@ server = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/MarcellM01/TinySearch"
-Repository = "https://github.com/MarcellM01/TinySearch"
+Homepage = "https://github.com/TinySuiteHQ/TinySearch"
+Repository = "https://github.com/TinySuiteHQ/TinySearch"
 
 [project.scripts]
 tinysearch = "tinysearch.cli:main"

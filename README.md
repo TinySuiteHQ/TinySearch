@@ -1,6 +1,6 @@
 # TinySearch
 
-<!-- mcp-name: io.github.MarcellM01/tinysearch -->
+<!-- mcp-name: io.github.TinySuiteHQ/tinysearch -->
 
 <p align="center">
   <a href="https://tinysuite.dev">
@@ -30,8 +30,8 @@
 [![Website](https://img.shields.io/badge/tinysuite.dev-home-000000?logo=googlechrome&logoColor=white)](https://tinysuite.dev)
 [![PyPI version](https://img.shields.io/pypi/v/tinysuite-search?label=pypi)](https://pypi.org/project/tinysuite-search/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Release](https://img.shields.io/github/v/release/MarcellM01/TinySearch?label=release)](https://github.com/MarcellM01/TinySearch/releases)
-[![Last Commit](https://img.shields.io/github/last-commit/MarcellM01/TinySearch)](https://github.com/MarcellM01/TinySearch/commits/main)
+[![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinySearch?label=release)](https://github.com/TinySuiteHQ/TinySearch/releases)
+[![Last Commit](https://img.shields.io/github/last-commit/TinySuiteHQ/TinySearch)](https://github.com/TinySuiteHQ/TinySearch/commits/main)
 [![Docker Pulls](https://img.shields.io/docker/pulls/marcellm01/tinysearch?label=docker%20pulls)](https://hub.docker.com/r/marcellm01/tinysearch)
 [![Discord](https://img.shields.io/badge/Discord-Join%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/NG6u2zamR)
 ![MCP Server](https://img.shields.io/badge/MCP-server-blue)
@@ -303,7 +303,7 @@ persistent crawler, or full search index when you need:
 ## Development
 
 ```bash
-git clone https://github.com/MarcellM01/TinySearch
+git clone https://github.com/TinySuiteHQ/TinySearch
 cd TinySearch
 python -m venv .venv
 source .venv/bin/activate
@@ -327,7 +327,7 @@ across Linux, macOS, and Windows.
 Questions, ideas, and bug reports are welcome:
 
 - [Join the TinySearch Discord](https://discord.gg/NG6u2zamR)
-- [Open a GitHub issue](https://github.com/MarcellM01/TinySearch/issues)
+- [Open a GitHub issue](https://github.com/TinySuiteHQ/TinySearch/issues)
 - [Email the maintainer](mailto:hello.marcbuilds@gmail.com)
 
 ## Privacy and license

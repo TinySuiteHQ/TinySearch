@@ -12,7 +12,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SERVER_NAME = "io.github.MarcellM01/tinysearch"
+GITHUB_REPOSITORY = "TinySuiteHQ/TinySearch"
+GITHUB_URL = f"https://github.com/{GITHUB_REPOSITORY}"
+SERVER_NAME = "io.github.TinySuiteHQ/tinysearch"
 PYPI_PACKAGE = "tinysuite-search"
 OCI_REPOSITORY = "docker.io/marcellm01/tinysearch"
 
@@ -35,6 +37,7 @@ def check(expected_version: str | None = None) -> str:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
     project = pyproject["project"]
     version = str(project["version"])
@@ -50,6 +53,15 @@ def check(expected_version: str | None = None) -> str:
         )
     if server.get("name") != SERVER_NAME:
         raise ValueError(f"server.json name must be {SERVER_NAME!r}")
+    if server.get("websiteUrl") != GITHUB_URL:
+        raise ValueError(f"server.json websiteUrl must be {GITHUB_URL!r}")
+    if server.get("repository", {}).get("url") != GITHUB_URL:
+        raise ValueError(f"server.json repository.url must be {GITHUB_URL!r}")
+
+    project_urls = project.get("urls", {})
+    for label in ("Homepage", "Repository"):
+        if project_urls.get(label) != GITHUB_URL:
+            raise ValueError(f"project.urls.{label} must be {GITHUB_URL!r}")
 
     pypi = _one_package(server, "pypi")
     if pypi.get("identifier") != PYPI_PACKAGE:
@@ -72,6 +84,12 @@ def check(expected_version: str | None = None) -> str:
     marker = f"mcp-name: {SERVER_NAME}"
     if marker not in readme:
         raise ValueError(f"README.md must contain the MCP ownership marker {marker!r}")
+    source_label = f'org.opencontainers.image.source="{GITHUB_URL}"'
+    if source_label not in dockerfile:
+        raise ValueError(f"Dockerfile must contain the OCI source label {source_label!r}")
+    server_label = f'io.modelcontextprotocol.server.name="{SERVER_NAME}"'
+    if server_label not in dockerfile:
+        raise ValueError(f"Dockerfile must contain the MCP server label {server_label!r}")
 
     requires_python = str(project.get("requires-python", ""))
     if not re.fullmatch(r">=3\.12", requires_python):

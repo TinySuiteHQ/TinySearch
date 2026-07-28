@@ -5,9 +5,9 @@ ARG TINYSEARCH_VERSION=dev
 LABEL org.opencontainers.image.title="TinySearch" \
       org.opencontainers.image.description="TinySearch MCP and HTTP research server" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.source="https://github.com/MarcellM01/TinySearch" \
+      org.opencontainers.image.source="https://github.com/TinySuiteHQ/TinySearch" \
       org.opencontainers.image.version="${TINYSEARCH_VERSION}" \
-      io.modelcontextprotocol.server.name="io.github.MarcellM01/tinysearch"
+      io.modelcontextprotocol.server.name="io.github.TinySuiteHQ/tinysearch"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
