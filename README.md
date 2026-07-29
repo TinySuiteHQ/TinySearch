@@ -107,6 +107,8 @@ client:
     "tinysearch": {
       "command": "uvx",
       "args": [
+        "--python",
+        "3.12",
         "--from",
         "tinysuite-search[server]",
         "tinysearch"
