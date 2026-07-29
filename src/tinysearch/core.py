@@ -50,7 +50,7 @@ async def research(query: str, *, config: ConfigInput | None = None) -> dict[str
     """Discover relevant URLs, crawl and rank them, and return structured evidence.
 
     `config`, if given, overrides the on-disk/env-driven config for this call
-    only (see `_resolve_config`) — pass a dict instead of pointing
+    only (see `_resolve_config`), pass a dict instead of pointing
     `TINYSEARCH_CONFIG_PATH` at a file when calling this as a library.
     """
     query = normalize_query(query)

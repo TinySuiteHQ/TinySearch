@@ -18,7 +18,7 @@ This environment uses the **tinysearch** MCP server. It exposes **three** tools.
 **`scrape_url(url, query)`**
 
 - **Input:** **`url`** (required) and **`query`** (required, non-empty). Pass **`query` as-is** with the same no-rewrite rule as `research`.
-- **When to use:** the user supplied a specific URL, or a prior search already identified the exact page to inspect. Do **not** use this for open-ended discovery — use **`research(query)`** instead.
+- **When to use:** the user supplied a specific URL, or a prior search already identified the exact page to inspect. Do **not** use this for open-ended discovery, use **`research(query)`** instead.
 - **Output:** `{"answer", "url", "title", "truncated", "retrieved_at"}`. The `answer` is a **URL-grounded prompt** (not a finished article): it contains the page content most relevant to `query`. **Your job** is to answer from that prompt and **cite the returned `url`**.
 - **Errors:** failures surface as `ValueError` with stable code prefixes: `invalid_url`, `blocked_url`, `unsupported_document`, `empty_content`, `fetch_failed`, `fetch_timeout`.
 
@@ -31,8 +31,8 @@ There is **no** `access_site`, `search_web`, `lite_*`, or `mode` / `max_results`
 #### Compound questions about “what do we use + is there something newer/better?”
 Always split into two sequential steps:
 
-1. **Codebase first** — search/read local files to find what the project actually uses. Never skip this on the assumption you already know.
-2. **MCP second** — call **`research(query)`** for discovery or **`scrape_url(url, query)`** when you already have the exact page URL. Use the returned `answer` prompt as the evidence base.
+1. **Codebase first**, search/read local files to find what the project actually uses. Never skip this on the assumption you already know.
+2. **MCP second**, call **`research(query)`** for discovery or **`scrape_url(url, query)`** when you already have the exact page URL. Use the returned `answer` prompt as the evidence base.
 
 This order is mandatory. Reversing it (or only doing the MCP half) mis-describes the project.
 
@@ -60,7 +60,7 @@ Prefer **URLs and short quotes** from the prompt text. External claims should be
 Use it when the **target page is already known**:
 - The user pasted a URL and asked about its content.
 - A prior `research` result (or codebase link) already identified the exact page.
-- You need focused extraction from one doc, article, or PDF/DOCX URL — not a web-wide search.
+- You need focused extraction from one doc, article, or PDF/DOCX URL, not a web-wide search.
 
 Pass the user’s question in **`query`** unchanged. Cite the **`url`** returned in the tool response (it may differ from the input after redirects).
 
@@ -152,6 +152,6 @@ pytest tests/ -q
 ## General code behaviour
 
 - When in doubt about a service or config value, search the codebase before guessing.
-- Do not assume the project matches vendor defaults — verify from source.
+- Do not assume the project matches vendor defaults, verify from source.
 - For external discovery, rely on **`research(query)`** and cite URLs from the returned prompt.
 - For a known page URL, rely on **`scrape_url(url, query)`** and cite the returned `url`.

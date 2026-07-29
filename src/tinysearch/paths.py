@@ -2,7 +2,7 @@
 
 These are only consulted when neither an explicit env var override
 (`TINYSEARCH_CONFIG_PATH`, `TINYSEARCH_MODELS_DIR`) nor a repo-relative
-`configs/`/`models/` directory is present — i.e. the genuinely-new case of a
+`configs/`/`models/` directory is present, i.e. the genuinely-new case of a
 `pip`/`uvx`-installed wheel with no surrounding checkout. Docker and
 from-source dev keep their existing behavior unchanged.
 """

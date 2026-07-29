@@ -1,6 +1,6 @@
 """Inspect configuration, browser, model, and writable directories without downloading anything.
 
-All output goes to stderr — this can run while an MCP stdio server is
+All output goes to stderr, this can run while an MCP stdio server is
 elsewhere on the same machine, so stdout must stay clean.
 """
 

@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 570">
+  <defs>
+    <clipPath id="round4"><rect x="0.5" y="0.5" width="1199" height="569" rx="6" /></clipPath>
+    <filter id="cardShadow" x="-5%" y="-5%" width="110%" height="110%">
+      <feDropShadow dx="0" dy="4" stdDeviation="7" flood-color="#14213D" flood-opacity="0.06" />
+    </filter>
+    <pattern id="cutHatch" width="8" height="8" patternTransform="rotate(45)" patternUnits="userSpaceOnUse">
+      <rect width="8" height="8" fill="#A2453C" />
+      <line x1="0" y1="0" x2="0" y2="8" stroke="#14213D" stroke-opacity="0.16" stroke-width="3" />
+    </pattern>
+  </defs>
+
+  <g font-family="'IBM Plex Mono','SFMono-Regular',Consolas,'Liberation Mono',monospace" filter="url(#cardShadow)">
+    <g clip-path="url(#round4)">
+      <rect width="1200" height="570" fill="#FFFFFF" />
+      <rect x="0.5" y="0.5" width="1199" height="569" rx="6" fill="none" stroke="#DDE3EC" stroke-width="1" />
+
+      <!-- Header: mark + title -->
+      <g transform="translate(48,42)">
+        <circle cx="10" cy="4" r="9" fill="none" stroke="#8FBFA8" stroke-width="5" />
+        <line x1="17" y1="11" x2="26" y2="20" stroke="#8FBFA8" stroke-width="5" stroke-linecap="round" />
+        <text x="42" y="11" font-size="22" font-weight="600" fill="#14213D">TinySearch vs. naive search + fetch</text>
+      </g>
+
+      <!-- Headline stat -->
+      <text x="48" y="104" font-size="42" font-weight="600" fill="#48705C">95% fewer tokens</text>
+
+      <!-- Legend -->
+      <g transform="translate(900,54)" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" font-size="13" font-weight="500">
+        <circle cx="6" cy="-4" r="5" fill="url(#cutHatch)" stroke="#A2453C" stroke-width="1" />
+        <text x="18" y="0" fill="#A2453C">Cut</text>
+        <circle cx="6" cy="22" r="5" fill="#48705C" />
+        <text x="18" y="26" fill="#48705C">Kept</text>
+      </g>
+
+      <!-- divider -->
+      <line x1="48" y1="150" x2="1152" y2="150" stroke="#DDE3EC" stroke-width="1" />
+
+      <!-- Panel 1: Tokens per query -->
+      <g transform="translate(48,182)">
+        <text x="0" y="0" font-size="15" font-weight="600" fill="#14213D">Tokens per query</text>
+
+        <line x1="0" y1="300" x2="480" y2="300" stroke="#DDE3EC" stroke-width="1" />
+
+        <rect x="70" y="34" width="120" height="266" rx="6" fill="url(#cutHatch)" stroke="#A2453C" stroke-width="1" />
+        <text x="130" y="24" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">24,044</text>
+        <text x="130" y="322" font-size="13" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#556070" text-anchor="middle">Naive</text>
+
+        <rect x="290" y="287" width="120" height="13" rx="6" fill="#48705C" />
+        <text x="350" y="277" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">1,133</text>
+        <text x="350" y="322" font-size="13" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#556070" text-anchor="middle">TinySearch</text>
+      </g>
+
+      <!-- Panel 2: Cost per 1,000 queries -->
+      <g transform="translate(672,182)">
+        <text x="0" y="0" font-size="15" font-weight="600" fill="#14213D">Cost per 1,000 queries (Sonnet 5)</text>
+
+        <line x1="0" y1="300" x2="480" y2="300" stroke="#DDE3EC" stroke-width="1" />
+
+        <rect x="70" y="34" width="120" height="266" rx="6" fill="url(#cutHatch)" stroke="#A2453C" stroke-width="1" />
+        <text x="130" y="24" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">$72.13</text>
+        <text x="130" y="322" font-size="13" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#556070" text-anchor="middle">Naive</text>
+
+        <rect x="290" y="287" width="120" height="13" rx="6" fill="#48705C" />
+        <text x="350" y="277" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">$3.40</text>
+        <text x="350" y="322" font-size="13" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#556070" text-anchor="middle">TinySearch</text>
+      </g>
+
+      <!-- Footer -->
+      <line x1="48" y1="520" x2="1152" y2="520" stroke="#DDE3EC" stroke-width="1" />
+      <text x="48" y="544" font-size="12" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#8891A0">n = 8 queries, same crawled pages. scripts/benchmark_token_savings.py</text>
+    </g>
+  </g>
+</svg>

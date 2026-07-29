@@ -96,6 +96,19 @@ Actual savings depend on the pages, evidence limits, client model, and provider
 pricing. TinySearch reduces the web content sent to the model; it does not
 control what the client does with that evidence afterward.
 
+<p align="center">
+  <img src="assets/token-savings-benchmark.svg" alt="Benchmark: TinySearch uses 95% fewer tokens than a naive search-and-fetch agent across 8 research queries, cutting cost per 1,000 queries from $72.13 to $3.40 at Claude Sonnet 5 input pricing" width="900" />
+</p>
+
+The naive baseline isn't a strawman product, it's the same pages TinySearch
+crawled for each query, fed to the model unfiltered, the way a generic
+"search, then fetch the page" tool (a plain web-search-plus-fetch loop, the
+kind built into most coding agents) would. Reproduce or rerun it yourself:
+
+```bash
+python scripts/benchmark_token_savings.py --json-out report.json
+```
+
 ## Quick start
 
 With [`uv`](https://docs.astral.sh/uv/) installed, add TinySearch to any MCP
@@ -122,7 +135,7 @@ The client launches TinySearch over stdio when it needs it. No repository
 clone, hosted account, or paid search key is required.
 
 On first launch, TinySearch installs Chromium and downloads the local
-embedding model before it starts accepting requests — a one-time delay of a
+embedding model before it starts accepting requests, a one-time delay of a
 minute or two. To avoid that delay on the first real query, pre-warm both
 ahead of time:
 

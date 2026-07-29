@@ -1,6 +1,6 @@
 """Install Chromium and download the configured ONNX embedding model.
 
-All output goes to stderr, matching `doctor` — this can run adjacent to an
+All output goes to stderr, matching `doctor`, this can run adjacent to an
 MCP stdio server, so stdout must stay clean.
 """
 

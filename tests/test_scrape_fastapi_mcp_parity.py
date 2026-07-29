@@ -32,7 +32,7 @@ def _shared_result() -> dict:
 class ScrapeFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
     """Both adapters delegate to the same `tinysearch.core.scrape_url`, so
     parity is structural rather than something each adapter must separately
-    get right — these tests guard against that delegation drifting apart."""
+    get right, these tests guard against that delegation drifting apart."""
 
     async def test_both_adapters_return_identical_answer(self) -> None:
         with patch(
