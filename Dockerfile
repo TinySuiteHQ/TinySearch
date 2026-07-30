@@ -36,5 +36,7 @@ RUN mkdir -p /ms-playwright \
 
 EXPOSE 8000
 VOLUME ["/data/models"]
+HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=3 \
+    CMD tinysearch doctor || exit 1
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 CMD ["tinysearch", "mcp"]
