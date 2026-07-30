@@ -24,7 +24,7 @@ dependencies = [
     "rank-bm25==0.2.2",
     "pypdf==6.14.2",
     "python-docx==1.2.0",
-    "huggingface_hub==0.36.0",
+    "huggingface_hub==1.25.1",
     "onnxruntime>=1.17.0,<2",
     "tokenizers>=0.15.0,<1",
     "openai==2.36.0",
