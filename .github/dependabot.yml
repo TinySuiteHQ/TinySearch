@@ -1,16 +1,68 @@
 version: 2
 updates:
-  - package-ecosystem: docker
-    directory: /
+  - package-ecosystem: "docker"
+    directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
+    open-pull-requests-limit: 1
+    groups:
+      routine-docker-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      docker-security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
+      # Python minor releases can require application and dependency changes.
+      - dependency-name: "python"
+        versions:
+          - ">= 3.13"
 
-  - package-ecosystem: pip
-    directory: /
+  - package-ecosystem: "pip"
+    directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
+    open-pull-requests-limit: 1
+    groups:
+      routine-python-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      python-security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
-  - package-ecosystem: github-actions
-    directory: /
+  - package-ecosystem: "github-actions"
+    directory: "/"
     schedule:
-      interval: weekly
+      interval: "weekly"
+    open-pull-requests-limit: 1
+    groups:
+      routine-actions-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
+      actions-security-updates:
+        applies-to: "security-updates"
+        patterns:
+          - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
