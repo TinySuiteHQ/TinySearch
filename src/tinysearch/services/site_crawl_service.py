@@ -25,6 +25,20 @@ _DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
     "body_width": 0,
 }
 
+# Semantic HTML5 chrome tags stripped before markdown generation / content
+# filtering runs. Without this, nav menus and header/footer boilerplate can
+# outscore a BM25 content filter's relevance threshold on some sites (the
+# filter operates on Crawl4AI's block segmentation, and a short nav block can
+# survive at any threshold) and leak into the fitted markdown ahead of the
+# actual article content. Removing the elements at the DOM level, before
+# markdown/filtering even runs, is the correct fix -- confirmed empirically
+# that no relevance threshold in [1.5, 4.0] filtered this content, while
+# excluding these tags removed it cleanly on every test site without
+# truncating real article content. Does not catch every kind of boilerplate
+# (e.g. an inline login-CTA banner not wrapped in one of these tags), just
+# the common semantically-tagged chrome.
+_BOILERPLATE_EXCLUDED_TAGS: list[str] = ["nav", "header", "footer", "aside"]
+
 
 @lru_cache(maxsize=1)
 def _crawl4ai_stack() -> tuple[Any, Any, Any, Any, Any, Any]:
@@ -116,11 +130,11 @@ def _crawler_config_for_fit_markdown(
     )
     mode = fit_markdown_mode.strip().lower()
     if mode in ("", "off", "none", "raw"):
-        return CrawlerRunConfig(verbose=False)
+        return CrawlerRunConfig(verbose=False, excluded_tags=_BOILERPLATE_EXCLUDED_TAGS)
     if mode == "bm25":
         q = (user_query or "").strip()
         if not q:
-            return CrawlerRunConfig(verbose=False)
+            return CrawlerRunConfig(verbose=False, excluded_tags=_BOILERPLATE_EXCLUDED_TAGS)
         content_filter = BM25ContentFilter(
             user_query=q,
             bm25_threshold=bm25_threshold,
@@ -135,6 +149,7 @@ def _crawler_config_for_fit_markdown(
         )
     return CrawlerRunConfig(
         verbose=False,
+        excluded_tags=_BOILERPLATE_EXCLUDED_TAGS,
         markdown_generator=DefaultMarkdownGenerator(
             content_filter=content_filter,
             options=dict(_DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
@@ -378,6 +393,7 @@ async def fetch_html_for_query(
     )
     config = CrawlerRunConfig(
         verbose=False,
+        excluded_tags=_BOILERPLATE_EXCLUDED_TAGS,
         markdown_generator=DefaultMarkdownGenerator(
             content_filter=bm25_filter,
             options=dict(_DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
