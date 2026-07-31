@@ -65,6 +65,28 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Scan container configuration
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: Dockerfile
+          scanners: misconfig
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          trivyignores: .trivyignore.yaml
+
+      - name: Scan repository for secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          skip-dirs: .venv
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v4.5.2
         with:
@@ -86,8 +108,11 @@ jobs:
 
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_IMAGE_CONFIG_SCANNERS: secret
         with:
           image-ref: ${{ env.IMAGE_NAME }}:scan
+          scanners: vuln,secret
           format: table
           severity: CRITICAL,HIGH
           exit-code: "1"
@@ -100,6 +125,8 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
+          sbom: true
+          provenance: mode=max
           build-args: |
             TINYSEARCH_VERSION=${{ steps.version.outputs.value }}
           tags: ${{ steps.tags.outputs.value }}

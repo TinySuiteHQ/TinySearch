@@ -2,7 +2,7 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.TinySuiteHQ/tinysearch",
   "description": "Self-hosted web research for MCP agents.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "websiteUrl": "https://github.com/TinySuiteHQ/TinySearch",
   "repository": {
     "url": "https://github.com/TinySuiteHQ/TinySearch",
@@ -12,7 +12,7 @@
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "docker.io/marcellm01/tinysearch:v0.4.1",
+      "identifier": "docker.io/marcellm01/tinysearch:v0.4.2",
       "transport": {
         "type": "stdio"
       },
@@ -52,7 +52,7 @@
     {
       "registryType": "pypi",
       "identifier": "tinysuite-search",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "transport": {
         "type": "stdio"
       }

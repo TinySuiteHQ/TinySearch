@@ -146,12 +146,34 @@ jobs:
         run: python -m unittest tests.test_live_search
 
   docker-build:
-    name: Docker build smoke test
+    name: Docker security and smoke test
     runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Scan container configuration
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: Dockerfile
+          scanners: misconfig
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          trivyignores: .trivyignore.yaml
+
+      - name: Scan repository for secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          skip-dirs: .venv
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -168,3 +190,15 @@ jobs:
 
       - name: Smoke-test image entrypoint
         run: docker run --rm tinysearch:test tinysearch --help
+
+      - name: Scan image for vulnerabilities and secrets
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_IMAGE_CONFIG_SCANNERS: secret
+        with:
+          image-ref: tinysearch:test
+          scanners: vuln,secret
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true

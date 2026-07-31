@@ -28,6 +28,8 @@ RUN mkdir -p /ms-playwright \
     && pip install --upgrade pip \
     && pip install ".[server]" \
     && python -m playwright install --with-deps chromium \
+    && pip check \
+    && pip uninstall --yes pip setuptools \
     && chmod -R a+rX /ms-playwright \
     && useradd --create-home --shell /usr/sbin/nologin tinysearch \
     && mkdir -p /data/models /app/trace_logs \
