@@ -1,0 +1,10 @@
+misconfigurations:
+  - id: AVD-DS-0002
+    paths:
+      - Dockerfile
+    expired_at: 2027-07-31
+    statement: >-
+      The entrypoint starts as root only to repair bind-mounted directory
+      ownership, then immediately execs the requested command through gosu as
+      the unprivileged tinysearch user. Revisit this exception if volume
+      initialization moves outside the runtime container.

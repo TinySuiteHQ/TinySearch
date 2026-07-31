@@ -1,0 +1,27 @@
+name: Rescan published Docker image
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    name: Scan Docker Hub image
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scan latest published image
+        uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          TRIVY_IMAGE_CONFIG_SCANNERS: secret
+        with:
+          image-ref: marcellm01/tinysearch:latest
+          scanners: vuln,secret
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true
