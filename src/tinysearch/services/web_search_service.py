@@ -68,7 +68,7 @@ class SearchBackendBlocked(SearchBackendError):
 
 
 ALLOWED_SEARCH_BACKENDS: frozenset[str] = frozenset(
-    {"searxng", "duckduckgo", "auto", "ddgs"}
+    {"searxng", "duckduckgo", "auto", "ddgs", "serpbase"}
 )
 DEFAULT_SEARXNG_URL = "http://searxng:8080/search"
 DEFAULT_DDGS_REGION = "us-en"
@@ -78,6 +78,11 @@ _DEFAULT_DDGS_TIMEOUT = 20.0
 _DEFAULT_BRAVE_TIMEOUT = 10.0
 BRAVE_API_KEY_ENV_VAR = "BRAVE_SEARCH_API_KEY"
 _BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
+
+# SerpBase — Google Search Results REST API
+SERPBASE_API_KEY_ENV_VAR = "SERPBASE_API_KEY"
+_SERPBASE_SEARCH_URL = "https://api.serpbase.dev/google/search"
+_DEFAULT_SERPBASE_TIMEOUT = 10.0
 
 
 def normalize_domain(value: str) -> str:
@@ -249,6 +254,89 @@ def _brave_search(
         title = str(item.get("title") or "").strip()
         target = str(item.get("url") or "").strip()
         text_field = str(item.get("description") or "").strip()
+        if not title or not target:
+            continue
+        out.append(
+            SearchResult(
+                result_id=len(out) + 1,
+                title=title,
+                url=target,
+                text=text_field,
+            )
+        )
+        if len(out) >= limit:
+            break
+
+    return out
+
+
+def _read_serpbase_api_key() -> str | None:
+    return os.environ.get(SERPBASE_API_KEY_ENV_VAR, "").strip() or None
+
+
+def _serpbase_search(
+    query: str,
+    limit: int,
+    *,
+    api_key: str,
+    timeout: float = _DEFAULT_SERPBASE_TIMEOUT,
+) -> list[SearchResult]:
+    """Query SerpBase's Google Search Results REST API.
+
+    SerpBase returns structured Google SERP data (title, link, snippet,
+    position) in clean JSON without scraping, CAPTCHAs, or proxy management.
+    Free tier includes 100 searches; paid at $0.30/1k queries.
+    """
+    params: list[tuple[str, str]] = [
+        ("q", query),
+        ("api_key", api_key),
+        ("num", str(limit)),
+    ]
+    full_url = f"{_SERPBASE_SEARCH_URL}?{urlencode(params)}"
+    req = Request(
+        full_url,
+        headers={"Accept": "application/json"},
+    )
+
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403, 429):
+            raise SearchBackendBlocked(
+                f"SerpBase refused the request (HTTP {exc.code})"
+            ) from exc
+        raise SearchBackendUnavailable(
+            f"SerpBase returned HTTP {exc.code}"
+        ) from exc
+    except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
+        raise SearchBackendUnavailable("SerpBase unreachable") from exc
+
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace"))
+    except json.JSONDecodeError as exc:
+        raise SearchBackendUnavailable(
+            "SerpBase did not return JSON"
+        ) from exc
+
+    if not isinstance(payload, dict):
+        raise SearchBackendUnavailable(
+            "SerpBase JSON payload was not an object"
+        )
+
+    raw_results = payload.get("organic_results") or []
+    if not isinstance(raw_results, list):
+        raise SearchBackendUnavailable(
+            "SerpBase 'organic_results' field was not a list"
+        )
+
+    out: list[SearchResult] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        target = str(item.get("link") or "").strip()
+        text_field = str(item.get("snippet") or "").strip()
         if not title or not target:
             continue
         out.append(
@@ -452,6 +540,15 @@ def _dispatch_search(
             return _ddgs_search(
                 query, limit, region=str(region) or None, backend="duckduckgo", timeout=ddgs_timeout
             )
+
+    if backend == "serpbase":
+        api_key = _read_serpbase_api_key()
+        if not api_key:
+            raise SearchBackendUnavailable(
+                "SerpBase API key not set. Set SERPBASE_API_KEY env var "
+                "or get one at https://serpbase.dev"
+            )
+        return _serpbase_search(query, limit, api_key=api_key)
 
     # backend == "searxng"
     try:
