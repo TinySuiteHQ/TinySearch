@@ -204,11 +204,14 @@ An abridged structured result looks like this:
 }
 ```
 
-MCP research and scraping tools return the evidence directly as a compact XML
-grounding prompt, ready for the client model to use. XML tags explicitly bound
-each source and chunk, and retrieved content is escaped so it cannot forge
-those boundaries. The Python API and FastAPI `output_format: "json"` mode
-return the structured evidence directly when applications need it.
+MCP research and scraping tools return a compact, source-grounded research
+packet for the client model to use directly. TinySearch first extracts each
+webpage into readable Markdown, then selects the passages worth keeping and
+ties each one to its source. The MCP response uses XML boundaries and escaping
+to keep that retrieved content clearly separate from the instructions around
+it; the Python API and FastAPI `output_format: "json"` mode return the same
+structured evidence for applications that need to inspect or transform it
+themselves.
 
 ## How it works
 
