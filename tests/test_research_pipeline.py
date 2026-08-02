@@ -87,29 +87,28 @@ class ResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             crawl_fn=_fake_crawl,
         )
 
-        self.assertIn("SEARCH-GROUNDED ANSWER PROMPT", _answer(result))
-        self.assertIn("CRITICAL INSTRUCTIONS", _answer(result))
-        self.assertIn("You are answering the QUESTION using only the text under RESULTS.", _answer(result))
-        self.assertIn("TODAY", _answer(result))
-        self.assertIn("First resolve any relative date in the QUESTION using TODAY.", _answer(result))
-        self.assertIn("Use only facts directly supported by RESULTS.", _answer(result))
-        self.assertIn("RESULTS", _answer(result))
-        self.assertIn("RESULT 1", _answer(result))
-        self.assertIn("TITLE 1\n======\nPython Async Search", _answer(result))
-        self.assertIn("URL 1\n======\nhttps://example.com/python", _answer(result))
+        self.assertIn("<search_grounded_answer", _answer(result))
+        self.assertIn("<instructions>", _answer(result))
+        self.assertIn("using only the evidence inside &lt;results&gt;", _answer(result))
+        self.assertIn('today="2026-06-12"', _answer(result))
+        self.assertIn("Resolve relative dates", _answer(result))
+        self.assertIn("Use only facts directly supported", _answer(result))
+        self.assertIn("<results>", _answer(result))
+        self.assertIn('<result index="1">', _answer(result))
+        self.assertIn("<title>\nPython Async Search\n</title>", _answer(result))
+        self.assertIn("<url>\nhttps://example.com/python\n</url>", _answer(result))
         self.assertIn(
-            "SEARCH PREVIEW 1\n======\nPython asyncio search guide.",
+            "<search_preview>\nPython asyncio search guide.\n</search_preview>",
             _answer(result),
         )
-        self.assertIn("RELEVANT TEXT 1\n======", _answer(result))
-        self.assertIn("----- RELEVANT CHUNK 1 -----", _answer(result))
+        self.assertIn("<relevant_text>", _answer(result))
+        self.assertIn('<chunk index="1">', _answer(result))
         self.assertIn(
             "Python asyncio search uses async tasks.",
             _answer(result),
         )
         self.assertIn("python async search", _answer(result))
-        self.assertEqual(_answer(result).count("\nQUESTION\n"), 2)
-        self.assertEqual(_answer(result).count("\nTODAY\n"), 2)
+        self.assertEqual(_answer(result).count("<question>"), 1)
         self.assertNotIn("START", _answer(result))
         self.assertNotIn("END", _answer(result))
         self.assertNotIn("Bread Recipes", _answer(result))
@@ -122,11 +121,11 @@ class ResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             crawl_fn=_fake_crawl,
         )
 
-        self.assertIn("RESULTS", _answer(result))
-        self.assertIn("QUESTION", _answer(result))
+        self.assertIn("<results />", _answer(result))
+        self.assertIn("<question>", _answer(result))
         self.assertIn("no results", _answer(result))
-        self.assertNotIn("RESULT 1", _answer(result))
-        self.assertNotIn("RELEVANT TEXT 1", _answer(result))
+        self.assertNotIn('<result index="1">', _answer(result))
+        self.assertNotIn("<relevant_text>", _answer(result))
 
     async def test_pipeline_filters_blocked_domains_before_crawling(self) -> None:
         crawled_urls: list[str] = []
@@ -193,11 +192,11 @@ class ResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             crawl_fn=_fake_crawl,
         )
 
-        self.assertIn("RESULT 1", _answer(result))
-        self.assertIn("RESULT 2", _answer(result))
-        self.assertIn("----- RELEVANT CHUNK 1 -----", _answer(result))
+        self.assertIn('<result index="1">', _answer(result))
+        self.assertIn('<result index="2">', _answer(result))
+        self.assertIn('<chunk index="1">', _answer(result))
         self.assertIn("Python asyncio search uses async tasks.", _answer(result))
-        self.assertEqual(_answer(result).count("----- RELEVANT CHUNK 1 -----"), 1)
+        self.assertEqual(_answer(result).count('<chunk index="1">'), 1)
 
     async def test_pipeline_uses_embedding_tokenizer_for_crawl_chunks(self) -> None:
         seen_encoding_names: list[str] = []
@@ -249,9 +248,9 @@ class ResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             crawl_fn=slow_crawl,
         )
 
-        self.assertIn("QUESTION", _answer(result))
+        self.assertIn("<question>", _answer(result))
         self.assertIn("python async search", _answer(result))
-        self.assertNotIn("RESULT 1", _answer(result))
+        self.assertNotIn('<result index="1">', _answer(result))
 
     async def test_pipeline_no_timeout_when_none(self) -> None:
         result = await run_research_pipeline(
@@ -269,7 +268,7 @@ class ResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
             crawl_fn=_fake_crawl,
         )
 
-        self.assertIn("RESULT 1", _answer(result))
+        self.assertIn('<result index="1">', _answer(result))
 
     async def test_pipeline_rejects_bm25_only_configuration(self) -> None:
         with self.assertRaises(ValueError):
@@ -299,8 +298,8 @@ class ResearchPipelineTests(unittest.IsolatedAsyncioTestCase):
                 crawl_fn=_fake_crawl,
             )
 
-            self.assertIn("QUESTION", _answer(result))
-            self.assertNotIn("RESULT 1", _answer(result))
+            self.assertIn("<question>", _answer(result))
+            self.assertNotIn('<result index="1">', _answer(result))
             trace = json.loads(trace_path.read_text(encoding="utf-8"))
             self.assertEqual(trace["status"], "search_backend_error")
 

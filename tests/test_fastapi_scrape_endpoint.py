@@ -52,7 +52,7 @@ class ScrapeEndpointTests(unittest.IsolatedAsyncioTestCase):
                 ScrapeRequest(url="https://example.com/x", query="q")
             )
 
-        self.assertIn("URL-GROUNDED ANSWER PROMPT", payload["answer"])
+        self.assertIn("<url_grounded_answer", payload["answer"])
         self.assertEqual(payload["url"], "https://example.com/x")
         self.assertEqual(payload["title"], "Title")
         self.assertEqual(payload["content_tokens"], 42)

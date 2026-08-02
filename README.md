@@ -204,9 +204,11 @@ An abridged structured result looks like this:
 }
 ```
 
-MCP tools return the same evidence as a grounded prompt by default, ready for
-the client model to use. Pass `output_format: "json"` when you want the
-structured result directly.
+MCP research and scraping tools return the evidence directly as a compact XML
+grounding prompt, ready for the client model to use. XML tags explicitly bound
+each source and chunk, and retrieved content is escaped so it cannot forge
+those boundaries. The Python API and FastAPI `output_format: "json"` mode
+return the structured evidence directly when applications need it.
 
 ## How it works
 

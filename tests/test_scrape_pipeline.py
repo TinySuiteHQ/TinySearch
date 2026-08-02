@@ -176,7 +176,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertIsInstance(result, ScrapeResult)
-        self.assertIn("URL-GROUNDED ANSWER PROMPT", _answer(result))
+        self.assertIn("<url_grounded_answer", _answer(result))
         self.assertIn("https://example.com/article", _answer(result))
         self.assertIn("Example Article", _answer(result))
         self.assertIn("What does this page say about async?", _answer(result))
@@ -473,7 +473,7 @@ class ScrapeUrlDocumentPathTests(unittest.IsolatedAsyncioTestCase):
                 document_fn=_fake_document,
             )
 
-        self.assertIn("URL-GROUNDED ANSWER PROMPT", _answer(result))
+        self.assertIn("<url_grounded_answer", _answer(result))
         self.assertEqual(result.url, "https://example.com/file.pdf")
         self.assertEqual(result.title, "")
         self.assertEqual(

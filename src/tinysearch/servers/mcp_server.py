@@ -175,13 +175,13 @@ Use research first when you need to discover relevant URLs. It searches the web
 through the configured backend (SearXNG by default, with a DuckDuckGo fallback),
 ranks search results with dense embeddings and BM25 using reciprocal rank
 fusion, crawls kept pages, ranks page chunks, and returns a grounded prompt in
-the answer field.
+the tool response directly.
 
 Use scrape_url after a URL is already known: either the user provided it, or a
 previous research result identified the page to inspect. It crawls the page,
 extracts clean markdown, ranks chunks against the query, and returns a grounded
-answer prompt. The caller's LLM should answer from that prompt and cite the
-source URL.
+XML answer prompt directly. The caller's LLM should answer from that prompt and
+cite the source URLs it contains.
 """.strip()
 
 
@@ -235,7 +235,7 @@ async def get_current_datetime_tool() -> dict[str, str]:
     title="Research",
     description=(
         "Discover relevant URLs for the user's question, crawl ranked pages, "
-        "and return a search-grounded answer prompt. "
+        "and return a search-grounded XML answer prompt directly. "
         "Use this first when you need to find sources. "
         "Pass the user's question as-is. For time-sensitive or relative-date "
         "questions, call get_current_datetime() first unless you already "
@@ -252,7 +252,7 @@ async def research(
             )
         ),
     ],
-) -> dict[str, Any]:
+) -> str:
     started = time.monotonic()
     _log(f"research called query={query!r}")
     try:
@@ -267,7 +267,7 @@ async def research(
             f"answer_tokens={_answer_tokens(answer)} "
             f"elapsed={elapsed:.2f}s"
         )
-        return {"answer": answer}
+        return answer
     except Exception as exc:
         elapsed = time.monotonic() - started
         _log(f"research failed elapsed={elapsed:.2f}s error={exc!r}")
@@ -278,7 +278,7 @@ async def research(
     name="scrape_url",
     title="Scrape URL",
     description=(
-        "Inspect a specific URL and return a grounded answer prompt containing "
+        "Inspect a specific URL and return a grounded XML answer prompt containing "
         "the page content most relevant to the requested query. Use this after "
         "the user provides a URL or research already identified the page to "
         "inspect. Pass the user's query without rewriting it."
@@ -303,7 +303,7 @@ async def scrape_url_tool(
             )
         ),
     ],
-) -> dict[str, Any]:
+) -> str:
     started = time.monotonic()
     max_tokens = DEFAULT_SCRAPE_MAX_TOKENS
     _log(f"scrape_url called url={url!r} query={query!r} max_tokens={max_tokens}")
@@ -324,22 +324,13 @@ async def scrape_url_tool(
     from tinysearch.prompts import to_prompt
 
     answer = to_prompt(result)
-    source = result["sources"][0]
     _log(
         f"scrape_url returning content_tokens={result['stats']['content_tokens']} "
         f"answer_tokens={_answer_tokens(answer)} "
         f"truncated={result['stats']['truncated']} "
         f"elapsed={elapsed:.2f}s"
     )
-    return {
-        "answer": answer,
-        "url": source["url"],
-        "title": source["title"],
-        "content_tokens": result["stats"]["content_tokens"],
-        "answer_tokens": _answer_tokens(answer),
-        "truncated": result["stats"]["truncated"],
-        "retrieved_at": result["retrieved_at"],
-    }
+    return answer
 
 
 def main() -> None:
