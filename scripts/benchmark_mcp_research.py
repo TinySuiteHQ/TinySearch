@@ -72,6 +72,8 @@ def _tool_result_summary(result: types.CallToolResult) -> dict[str, object]:
     if text_parts:
         joined = "\n".join(text_parts)
         out["text_chars"] = len(joined)
+        if joined.lstrip().startswith("<search_grounded_answer"):
+            out["answer_chars"] = len(joined)
         try:
             data = json.loads(joined)
             if isinstance(data, dict) and "answer" in data:

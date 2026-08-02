@@ -41,9 +41,9 @@ class ScrapeFastApiMcpParityTests(unittest.IsolatedAsyncioTestCase):
             fastapi_payload = await scrape_endpoint(
                 ScrapeRequest(url="https://example.com/x", query="q")
             )
-            mcp_payload = await _fn(scrape_url_tool)("https://example.com/x", "q")
+            mcp_prompt = await _fn(scrape_url_tool)("https://example.com/x", "q")
 
-        self.assertEqual(fastapi_payload, mcp_payload)
+        self.assertEqual(fastapi_payload["answer"], mcp_prompt)
 
     async def test_both_adapters_pass_the_same_url_and_query_to_core(self) -> None:
         core_mock = AsyncMock(return_value=_shared_result())

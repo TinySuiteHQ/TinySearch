@@ -57,8 +57,8 @@ class ResearchParityTests(unittest.IsolatedAsyncioTestCase):
             )
             mcp_response = await _fn(mcp_research)("  test query  ")
 
-        self.assertEqual(fastapi_response, mcp_response)
-        self.assertIn("SEARCH-GROUNDED ANSWER PROMPT", fastapi_response["answer"])
+        self.assertEqual(fastapi_response["answer"], mcp_response)
+        self.assertIn("<search_grounded_answer", mcp_response)
 
     async def test_research_rejects_whitespace_only_query(self) -> None:
         with self.assertRaisesRegex(ValueError, "query must not be empty"):

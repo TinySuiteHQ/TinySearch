@@ -13,13 +13,13 @@ This environment uses the **tinysearch** MCP server. It exposes **three** tools.
 **`research(query)`**
 
 - **Input:** a single string field **`query`** only. Pass the user’s question **as-is**: do not rewrite, spell-correct, add dates, expand abbreviations, translate, or “improve” the wording before calling.
-- **Output:** `{"answer": "<prompt string>"}`. The `answer` is a **search-grounded prompt** (not a finished article): it aggregates ranked web results, crawled page text, and chunk context. **Your job** is to answer the user from that prompt and **cite source URLs** that appear in the blocks.
+- **Output:** a **search-grounded XML prompt** directly (not a finished article). It aggregates ranked web results, crawled page text, and chunk context. **Your job** is to answer the user from that prompt and **cite source URLs** contained in its `<result>` elements.
 
 **`scrape_url(url, query)`**
 
 - **Input:** **`url`** (required) and **`query`** (required, non-empty). Pass **`query` as-is** with the same no-rewrite rule as `research`.
 - **When to use:** the user supplied a specific URL, or a prior search already identified the exact page to inspect. Do **not** use this for open-ended discovery, use **`research(query)`** instead.
-- **Output:** `{"answer", "url", "title", "truncated", "retrieved_at"}`. The `answer` is a **URL-grounded prompt** (not a finished article): it contains the page content most relevant to `query`. **Your job** is to answer from that prompt and **cite the returned `url`**.
+- **Output:** a **URL-grounded XML prompt** directly (not a finished article). It contains the page content most relevant to `query`; retrieval diagnostics are attributes on `<url_grounded_answer>`. **Your job** is to answer from that prompt and **cite the URL in its `<page>` element**.
 - **Errors:** failures surface as `ValueError` with stable code prefixes: `invalid_url`, `blocked_url`, `unsupported_document`, `empty_content`, `fetch_failed`, `fetch_timeout`.
 
 There is **no** `access_site`, `search_web`, `lite_*`, or `mode` / `max_results` on this server. Use **`get_current_datetime()`** for current UTC time, **`research(query)`** for discovery, and **`scrape_url(url, query)`** when you already know the page to read.
@@ -32,7 +32,7 @@ There is **no** `access_site`, `search_web`, `lite_*`, or `mode` / `max_results`
 Always split into two sequential steps:
 
 1. **Codebase first**, search/read local files to find what the project actually uses. Never skip this on the assumption you already know.
-2. **MCP second**, call **`research(query)`** for discovery or **`scrape_url(url, query)`** when you already have the exact page URL. Use the returned `answer` prompt as the evidence base.
+2. **MCP second**, call **`research(query)`** for discovery or **`scrape_url(url, query)`** when you already have the exact page URL. Use the returned XML prompt as the evidence base.
 
 This order is mandatory. Reversing it (or only doing the MCP half) mis-describes the project.
 
@@ -62,7 +62,7 @@ Use it when the **target page is already known**:
 - A prior `research` result (or codebase link) already identified the exact page.
 - You need focused extraction from one doc, article, or PDF/DOCX URL, not a web-wide search.
 
-Pass the user’s question in **`query`** unchanged. Cite the **`url`** returned in the tool response (it may differ from the input after redirects).
+Pass the user’s question in **`query`** unchanged. Cite the URL inside the returned prompt’s **`<page>`** element (it may differ from the input after redirects).
 
 #### Source hygiene
 - Prefer **official docs** over blogs when the prompt includes them.
@@ -76,7 +76,7 @@ Pass the user’s question in **`query`** unchanged. Cite the **`url`** returned
 1. **Time check:** for time-sensitive or relative-date questions, call **`get_current_datetime()`** first unless you already know the current UTC date and time.
 2. **Discovery first:** if you do not yet know which page to read, call **`research(query)`** once with a clear question aligned to the user’s goal.
 3. **Known URL:** if the user gave a URL (or one is already identified), call **`scrape_url(url, query)`** instead of re-searching for the same page.
-4. **Answer from `answer`**: synthesize the user’s reply from the grounded prompt; pull **URLs** from the prompt (or the `url` field for `scrape_url`) for citations.
+4. **Answer from the XML prompt**: synthesize the user’s reply from the grounded evidence and pull URLs from its `<result>` or `<page>` elements for citations.
 5. If the prompt is thin on one angle, **refine `query`** and call the same tool again with a narrower follow-up, or switch tools only when the gap is “find a page” (`research`) vs “read this page” (`scrape_url`).
 
 #### If the user gave an exact URL
@@ -95,7 +95,7 @@ Call **`scrape_url(url, query)`** with the pasted URL and the user’s question 
 Step 1 – Search the codebase for the relevant config/constant/import.
 Step 2 – Read the specific file(s) to confirm current value/behavior.
 Step 3 – Call research(query) for discovery, or scrape_url(url, query) if you already have the doc URL.
-Step 4 – Answer from the answer prompt; cite URLs present in the prompt (or the scrape_url response url).
+Step 4 – Answer from the XML prompt; cite URLs in its result or page elements.
 Step 5 – Synthesize: "Project uses X. Sources in the MCP prompt suggest Y. Upgrade path Z."
 ```
 

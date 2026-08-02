@@ -46,6 +46,7 @@ def to_prompt(result: Mapping[str, Any], *, today: str | None = None) -> str:
             question=question,
             results=sources,
             today=today,
+            retrieved_at=str(result.get("retrieved_at") or "") or None,
         )
     if operation == "scrape":
         source = sources[0] if sources else {
@@ -53,11 +54,20 @@ def to_prompt(result: Mapping[str, Any], *, today: str | None = None) -> str:
             "url": "",
             "ranked_chunks": [],
         }
+        raw_stats = result.get("stats")
+        stats = raw_stats if isinstance(raw_stats, Mapping) else {}
+        truncated = stats.get("truncated")
+        content_tokens = stats.get("content_tokens")
         return format_url_grounded_prompt(
             question=question,
             url=source["url"],
             title=source["title"],
             ranked_chunks=source["ranked_chunks"],
             today=today,
+            retrieved_at=str(result.get("retrieved_at") or "") or None,
+            truncated=truncated if isinstance(truncated, bool) else None,
+            content_tokens=(
+                int(content_tokens) if isinstance(content_tokens, int) else None
+            ),
         )
     raise ValueError(f"unsupported TinySearch result operation {operation!r}")

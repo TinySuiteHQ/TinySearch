@@ -4,7 +4,9 @@ import unittest
 from inspect import signature
 from unittest.mock import AsyncMock, patch
 
-from tinysearch.servers.mcp_server import research, scrape_url_tool
+from mcp import types
+
+from tinysearch.servers.mcp_server import mcp, research, scrape_url_tool
 from tinysearch.services.scrape_service import (
     EmptyContentError,
     FetchFailedError,
@@ -47,21 +49,33 @@ class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
             ["url", "query"],
         )
 
-    async def test_returns_answer_and_diagnostics(self) -> None:
+    async def test_returns_xml_prompt_directly_with_diagnostics(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())
         with patch("tinysearch.core.scrape_url", scrape_mock):
-            payload = await _fn(scrape_url_tool)(
+            prompt = await _fn(scrape_url_tool)(
                 "https://example.com/x", "q"
             )
 
-        self.assertIn("URL-GROUNDED ANSWER PROMPT", payload["answer"])
-        self.assertEqual(payload["url"], "https://example.com/x")
-        self.assertEqual(payload["title"], "Title")
-        self.assertEqual(payload["content_tokens"], 42)
-        self.assertGreater(payload["answer_tokens"], 0)
-        self.assertFalse(payload["truncated"])
-        self.assertEqual(payload["retrieved_at"], "2026-06-12T10:30:00Z")
-        self.assertNotIn("metadata", payload)
+        self.assertIsInstance(prompt, str)
+        self.assertIn("<url_grounded_answer", prompt)
+        self.assertIn('retrieved_at="2026-06-12T10:30:00Z"', prompt)
+        self.assertIn('truncated="false"', prompt)
+        self.assertIn('content_tokens="42"', prompt)
+        self.assertIn("<url>\nhttps://example.com/x\n</url>", prompt)
+
+    async def test_mcp_wire_text_is_xml_not_a_json_answer_envelope(self) -> None:
+        with patch("tinysearch.core.scrape_url", AsyncMock(return_value=_result())):
+            content, structured = await mcp._tool_manager.call_tool(
+                "scrape_url",
+                {"url": "https://example.com/x", "query": "q"},
+                convert_result=True,
+            )
+
+        self.assertEqual(len(content), 1)
+        self.assertIsInstance(content[0], types.TextContent)
+        self.assertTrue(content[0].text.startswith("<url_grounded_answer"))
+        self.assertFalse(content[0].text.startswith("{"))
+        self.assertEqual(structured, {"result": content[0].text})
 
     async def test_default_max_tokens_passed_through(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())
