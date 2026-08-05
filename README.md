@@ -1,5 +1,7 @@
 # TinySearch
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.TinySuiteHQ%2Ftinysearch.svg)](https://mcptoplist.com/server/io.github.TinySuiteHQ%2Ftinysearch)
+
 <!-- mcp-name: io.github.TinySuiteHQ/tinysearch -->
 
 <p align="center">
