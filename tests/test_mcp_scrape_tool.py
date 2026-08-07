@@ -43,20 +43,28 @@ class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
     def test_research_signature_only_exposes_query(self) -> None:
         self.assertEqual(list(signature(_fn(research)).parameters), ["query"])
 
-    def test_mcp_signature_exposes_url_optional_query_and_token_budget(self) -> None:
+    def test_mcp_signature_exposes_url_and_optional_query(self) -> None:
         self.assertEqual(
             list(signature(_fn(scrape_url_tool)).parameters),
-            ["url", "query", "max_tokens"],
+            ["url", "query"],
         )
+
+    def test_mcp_batch_signature_exposes_only_items(self) -> None:
+        self.assertEqual(list(signature(_fn(scrape_urls_tool)).parameters), ["items"])
 
     async def test_batch_tool_preserves_omitted_and_focused_queries(self) -> None:
         batch_mock = AsyncMock(return_value={"operation": "scrape_batch", "results": []})
-        with patch("tinysearch.core.scrape_urls", batch_mock):
+        config = {"scrape_max_tokens": 2000}
+        with patch("tinysearch.core.scrape_urls", batch_mock), patch(
+            "tinysearch.servers.mcp_server.load_tinysearch_config", return_value=config
+        ):
             result = await _fn(scrape_urls_tool)(
                 [{"url": "https://one.example"}, {"url": "https://two.example", "query": "pricing"}]
             )
         self.assertEqual(result["operation"], "scrape_batch")
         self.assertEqual(batch_mock.await_args.args[0][0], {"url": "https://one.example"})
+        self.assertEqual(batch_mock.await_args.kwargs["max_tokens"], 2000)
+        self.assertIs(batch_mock.await_args.kwargs["config"], config)
 
     async def test_returns_xml_prompt_directly_with_diagnostics(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())
@@ -86,12 +94,16 @@ class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(content[0].text.startswith("{"))
         self.assertEqual(structured, {"result": content[0].text})
 
-    async def test_default_max_tokens_passed_through(self) -> None:
+    async def test_configured_max_tokens_passed_through(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())
-        with patch("tinysearch.core.scrape_url", scrape_mock):
+        config = {"scrape_max_tokens": 2000}
+        with patch("tinysearch.core.scrape_url", scrape_mock), patch(
+            "tinysearch.servers.mcp_server.load_tinysearch_config", return_value=config
+        ):
             await _fn(scrape_url_tool)("https://example.com/x", "q")
 
-        self.assertEqual(scrape_mock.await_args.kwargs["max_tokens"], 4000)
+        self.assertEqual(scrape_mock.await_args.kwargs["max_tokens"], 2000)
+        self.assertIs(scrape_mock.await_args.kwargs["config"], config)
 
     async def _run_with_exc(self, exc: Exception) -> ValueError:
         scrape_mock = AsyncMock(side_effect=exc)

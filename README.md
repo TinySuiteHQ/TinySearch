@@ -155,7 +155,7 @@ Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 | --- | --- |
 | `search(query, limit=10)` | You need fast, backend-ordered top-level discovery |
 | `research(query)` | The agent needs to discover and compare relevant sources |
-| `scrape_url(url, query="*")` | You know a page; `*` returns its first clean 4k tokens in page order |
+| `scrape_url(url, query="*")` | You know a page; `*` returns its configured clean page-order token budget |
 | `scrape_urls(items)` | You need up to five independent URL/query scrapes in one batch |
 | `get_current_datetime()` | Research depends on the current date or time |
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from inspect import signature
 import json
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -72,10 +73,18 @@ class FastSearchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Published: 2026-08-01T12:00:00+00:00", text_result["answer"])
 
     async def test_mcp_returns_compact_text(self) -> None:
-        with patch("tinysearch.servers.mcp_server.core.search", new=AsyncMock(return_value=_payload())):
+        config = {"search_max_results": 7}
+        with patch(
+            "tinysearch.servers.mcp_server.core.search", new=AsyncMock(return_value=_payload())
+        ) as search, patch("tinysearch.servers.mcp_server.load_tinysearch_config", return_value=config):
             answer = await _fn(search_tool)("q")
         self.assertIn("1. Async tasks", answer)
         self.assertIn("Preview: Coroutines and tasks.", answer)
+        self.assertEqual(search.await_args.kwargs["limit"], 7)
+        self.assertIs(search.await_args.kwargs["config"], config)
+
+    def test_mcp_search_exposes_only_query(self) -> None:
+        self.assertEqual(list(signature(_fn(search_tool)).parameters), ["query"])
 
     async def test_fastapi_maps_backend_failure_to_bad_gateway(self) -> None:
         with patch(

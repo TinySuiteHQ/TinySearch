@@ -14,6 +14,10 @@
   "_comment_ddgs_timeout_seconds": "Timeout for one DDGS request. Increase this on slow networks; reduce it when fast failure is preferable.",
   "ddgs_timeout_seconds": 20.0,
 
+  "_comment_search_max_results": "Search only. Number of backend-ordered discovery results returned by the MCP search tool.",
+  "search_max_results": 10,
+  "_comment_scrape_max_tokens": "Scrape tools only. Maximum content tokens returned for each MCP scrape_url or scrape_urls item.",
+  "scrape_max_tokens": 2000,
   "_comment_search_top_k": "Research only. Number of raw search results requested before reranking. Higher values improve breadth but increase ranking work.",
   "search_top_k": 30,
   "_comment_search_rrf_cutoff": "Research only. Minimum reciprocal-rank-fusion score for search results. Zero disables score filtering.",

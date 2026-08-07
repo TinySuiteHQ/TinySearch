@@ -18,7 +18,6 @@ from tinysearch.services.tinysearch_config_service import (
     tokenizer_name_for_config,
 )
 from tinysearch.services.scrape_service import (
-    DEFAULT_SCRAPE_MAX_TOKENS,
     SCRAPE_ERROR_MAP,
     ScrapeError,
 )
@@ -156,10 +155,10 @@ async def _run_streamable_http_combined_async() -> None:
 
 
 MCP_INSTRUCTIONS = """
-This MCP server exposes four tools:
+This MCP server exposes five tools:
 
 1. get_current_datetime()
-2. search(query, limit=10)
+2. search(query)
 3. research(query)
 4. scrape_url(url, query="*")
 5. scrape_urls(items)
@@ -178,12 +177,10 @@ backend's results in backend order with titles, URLs, previews, and upstream
 publication dates when available. It does not embed, rerank, crawl, or ground
 the results.
 
-Use research when you need to discover and compare page content. It searches,
-ranks search results with dense embeddings and BM25, crawls kept pages, ranks
-page chunks, and returns a grounded prompt in the tool response directly.
+The research tool is deprecated. Use search instead.
 
 Use scrape_url after a URL is already known. Omit query or pass `*` to receive
-the first 4,000 tokens of clean Markdown in page order. Supply a focused query
+the configured 2,000-token budget of clean Markdown in page order. Supply a focused query
 only when relevant chunks should be selected. Use scrape_urls for up to five
 independent URL/query pairs in one batch.
 """.strip()
@@ -252,18 +249,16 @@ async def search_tool(
             )
         ),
     ],
-    limit: Annotated[
-        int,
-        Field(ge=1, le=50, description="Maximum results to return; defaults to 10."),
-    ] = 10,
 ) -> str:
     started = time.monotonic()
+    config = load_tinysearch_config()
+    limit = config["search_max_results"]
     _log(f"search called query={query!r} limit={limit}")
     try:
         result = await core.search(
             query,
             limit=limit,
-            config=load_tinysearch_config(),
+            config=config,
         )
     except Exception as exc:
         elapsed = time.monotonic() - started
@@ -281,15 +276,10 @@ async def search_tool(
 
 @mcp.tool(
     name="research",
-    title="Research",
+    title="Research (Deprecated)",
     description=(
-        "Discover relevant URLs for the user's question, crawl ranked pages, "
-        "and return a search-grounded XML answer prompt directly. "
-        "Use this first when you need to find sources. Formulate the query "
-        "for effective retrieval while preserving the user's important "
-        "constraints and intent. For time-sensitive or relative-date "
-        "questions, call get_current_datetime() first unless you already "
-        "know the current date and time."
+        "Deprecated: use search instead. This legacy tool discovers relevant URLs, "
+        "crawls ranked pages, and returns a search-grounded XML answer prompt."
     ),
 )
 async def research(
@@ -297,7 +287,7 @@ async def research(
         str,
         Field(
             description=(
-                "A search/research query describing the information to find. "
+                "A query describing the information to find. "
                 "Rewrite or refine it as needed for effective retrieval while "
                 "preserving important names, constraints, qualifiers, and intent."
             )
@@ -330,7 +320,7 @@ async def research(
     title="Scrape URL",
     description=(
         "Inspect a specific URL and return a grounded XML answer prompt containing "
-        "clean page content. Omit query or use '*' for the first 4,000 page-order "
+        "clean page content. Omit query or use '*' for the configured 2,000 page-order "
         "tokens; supply a focused query only to select relevant chunks."
     ),
 )
@@ -349,19 +339,16 @@ async def scrape_url_tool(
         Field(
             description=(
                 "Optional focused question for ranking page chunks. Omit or set '*' "
-                "to return the first 4,000 clean-Markdown tokens in page order."
+                "to return the configured 2,000 clean-Markdown tokens in page order."
             )
         ),
     ] = "*",
-    max_tokens: Annotated[
-        int,
-        Field(ge=1, description="Maximum returned tokens; defaults to 4,000."),
-    ] = DEFAULT_SCRAPE_MAX_TOKENS,
 ) -> str:
     started = time.monotonic()
+    config = load_tinysearch_config()
+    max_tokens = config["scrape_max_tokens"]
     _log(f"scrape_url called url={url!r} query={query!r} max_tokens={max_tokens}")
     try:
-        config = load_tinysearch_config()
         result = await core.scrape_url(
             url,
             query,
@@ -400,16 +387,14 @@ async def scrape_urls_tool(
         list[dict[str, str | None]],
         Field(description="One to five items, each with url and optional query."),
     ],
-    max_tokens: Annotated[
-        int,
-        Field(ge=1, description="Maximum tokens for each item; defaults to 4,000."),
-    ] = DEFAULT_SCRAPE_MAX_TOKENS,
 ) -> dict[str, Any]:
+    config = load_tinysearch_config()
+    max_tokens = config["scrape_max_tokens"]
     _log(f"scrape_urls called items={len(items)} max_tokens={max_tokens}")
     return await core.scrape_urls(
         items,
         max_tokens=max_tokens,
-        config=load_tinysearch_config(),
+        config=config,
     )
 
 
