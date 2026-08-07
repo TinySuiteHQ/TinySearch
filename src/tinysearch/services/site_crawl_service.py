@@ -369,12 +369,12 @@ async def crawl(
 
 async def fetch_html_for_query(
     url: str,
-    user_query: str,
+    user_query: str | None,
     *,
     bm25_threshold: float = 1.5,
     bm25_language: str = "english",
 ) -> dict[str, Any]:
-    """Fetch a URL through Crawl4AI applying a BM25 content filter on the body.
+    """Fetch a URL, applying a BM25 content filter only for a supplied query.
 
     Returns ``final_url``, ``html``, ``markdown_raw``, ``markdown_fit`` and the
     crawler's ``metadata`` dict. The ``final_url`` reflects the URL after any
@@ -386,19 +386,21 @@ async def fetch_html_for_query(
         _crawl4ai_stack()
     )
 
-    bm25_filter = BM25ContentFilter(
-        user_query=user_query,
-        bm25_threshold=bm25_threshold,
-        language=bm25_language,
-    )
-    config = CrawlerRunConfig(
-        verbose=False,
-        excluded_tags=_BOILERPLATE_EXCLUDED_TAGS,
-        markdown_generator=DefaultMarkdownGenerator(
+    config_kwargs: dict[str, Any] = {
+        "verbose": False,
+        "excluded_tags": _BOILERPLATE_EXCLUDED_TAGS,
+    }
+    if user_query:
+        bm25_filter = BM25ContentFilter(
+            user_query=user_query,
+            bm25_threshold=bm25_threshold,
+            language=bm25_language,
+        )
+        config_kwargs["markdown_generator"] = DefaultMarkdownGenerator(
             content_filter=bm25_filter,
             options=dict(_DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
-        ),
-    )
+        )
+    config = CrawlerRunConfig(**config_kwargs)
 
     async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as crawler:
         result = await crawler.arun(url=url, config=config)
@@ -415,7 +417,7 @@ async def fetch_html_for_query(
         "final_url": str(final_url),
         "html": _get_html(result),
         "markdown_raw": _get_markdown_raw(result),
-        "markdown_fit": _get_markdown_fit(result) or "",
+        "markdown_fit": (_get_markdown_fit(result) or "") if user_query else "",
         "metadata": metadata,
     }
 

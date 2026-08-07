@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from tinysearch.servers.fastapi_server import ScrapeRequest, scrape_endpoint
+from tinysearch.servers.fastapi_server import (
+    ScrapeBatchRequest,
+    ScrapeRequest,
+    scrape_batch_endpoint,
+    scrape_endpoint,
+)
 from tinysearch.services.scrape_service import (
     EmptyContentError,
     FetchFailedError,
@@ -35,9 +40,9 @@ def _result() -> dict:
 
 
 class ScrapeRequestValidationTests(unittest.TestCase):
-    def test_rejects_empty_query(self) -> None:
-        with self.assertRaises(ValidationError):
-            ScrapeRequest(url="https://example.com/x", query="")
+    def test_empty_or_omitted_query_selects_page_order_mode(self) -> None:
+        self.assertIsNone(ScrapeRequest(url="https://example.com/x").query)
+        self.assertEqual(ScrapeRequest(url="https://example.com/x", query="").query, "")
 
     def test_rejects_non_http_scheme(self) -> None:
         with self.assertRaises(ValidationError):
@@ -45,6 +50,21 @@ class ScrapeRequestValidationTests(unittest.TestCase):
 
 
 class ScrapeEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_batch_passes_independent_optional_queries_to_core(self) -> None:
+        batch_mock = AsyncMock(return_value={"operation": "scrape_batch", "status": "ok", "results": []})
+        with patch("tinysearch.core.scrape_urls", batch_mock):
+            payload = await scrape_batch_endpoint(
+                ScrapeBatchRequest(
+                    items=[
+                        {"url": "https://one.example"},
+                        {"url": "https://two.example", "query": "find pricing"},
+                    ]
+                )
+            )
+        self.assertEqual(payload["operation"], "scrape_batch")
+        self.assertEqual(batch_mock.await_args.args[0][0]["query"], None)
+        self.assertEqual(batch_mock.await_args.args[0][1]["query"], "find pricing")
+
     async def test_returns_mcp_aligned_payload(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())
         with patch("tinysearch.core.scrape_url", scrape_mock):

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 from mcp import types
 
-from tinysearch.servers.mcp_server import mcp, research, scrape_url_tool
+from tinysearch.servers.mcp_server import mcp, research, scrape_url_tool, scrape_urls_tool
 from tinysearch.services.scrape_service import (
     EmptyContentError,
     FetchFailedError,
@@ -43,11 +43,20 @@ class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
     def test_research_signature_only_exposes_query(self) -> None:
         self.assertEqual(list(signature(_fn(research)).parameters), ["query"])
 
-    def test_mcp_signature_only_exposes_url_and_query(self) -> None:
+    def test_mcp_signature_exposes_url_optional_query_and_token_budget(self) -> None:
         self.assertEqual(
             list(signature(_fn(scrape_url_tool)).parameters),
-            ["url", "query"],
+            ["url", "query", "max_tokens"],
         )
+
+    async def test_batch_tool_preserves_omitted_and_focused_queries(self) -> None:
+        batch_mock = AsyncMock(return_value={"operation": "scrape_batch", "results": []})
+        with patch("tinysearch.core.scrape_urls", batch_mock):
+            result = await _fn(scrape_urls_tool)(
+                [{"url": "https://one.example"}, {"url": "https://two.example", "query": "pricing"}]
+            )
+        self.assertEqual(result["operation"], "scrape_batch")
+        self.assertEqual(batch_mock.await_args.args[0][0], {"url": "https://one.example"})
 
     async def test_returns_xml_prompt_directly_with_diagnostics(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())

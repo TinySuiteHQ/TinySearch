@@ -27,6 +27,7 @@ from tinysearch.services.scrape_service import (
     select_chunks_under_budget,
     utc_iso8601_z,
 )
+from tinysearch.services.token_counter_service import decode_tokens, encode_tokens
 from tinysearch.services.site_crawl_service import (
     extract_document_text,
     fetch_html_for_query,
@@ -39,7 +40,7 @@ from tinysearch.services.url_safety_service import assert_url_is_fetchable
 
 async def run_scrape_pipeline(
     url: str,
-    query: str,
+    query: str | None,
     *,
     config: Mapping[str, Any],
     max_tokens: int = DEFAULT_SCRAPE_MAX_TOKENS,
@@ -48,10 +49,14 @@ async def run_scrape_pipeline(
     crawl_fn: HtmlCrawlFn | None = None,
     document_fn: DocumentExtractFn | None = None,
 ) -> ScrapeResult:
-    """Return query-relevant evidence extracted from one URL."""
+    """Extract a URL in page order, or rank chunks only for a supplied query.
+
+    ``query=None`` and ``query='*'`` select raw page-order extraction; any
+    other non-empty query enables the existing focused chunk-ranking path.
+    """
     cleaned_query = (query or "").strip()
-    if not cleaned_query:
-        raise ValueError("query must not be empty")
+    raw_page_order = cleaned_query in {"", "*"}
+    public_query = "*" if raw_page_order else cleaned_query
     if max_tokens <= 0:
         raise ValueError("max_tokens must be positive")
 
@@ -83,7 +88,7 @@ async def run_scrape_pipeline(
         crawl_fn = crawl_fn or fetch_html_for_query
         page = await fetch_html_with_timeout(
             url=safe_url,
-            query=cleaned_query,
+            query=None if raw_page_order else cleaned_query,
             bm25_threshold=resolved["crawl_bm25_threshold"],
             bm25_language=resolved["crawl_bm25_language"],
             timeout_seconds=fetch_timeout_seconds,
@@ -96,10 +101,35 @@ async def run_scrape_pipeline(
             final_url = assert_url_is_fetchable(final_url, blocked_domains)
         markdown_raw = str(page.get("markdown_raw") or "")
         markdown_fit = str(page.get("markdown_fit") or "")
-        markdown = markdown_fit or markdown_raw
+        markdown = markdown_raw if raw_page_order else markdown_fit or markdown_raw
 
     if not markdown or not markdown.strip():
         raise EmptyContentError(f"no readable content extracted from {final_url}")
+
+    if raw_page_order:
+        tokens = encode_tokens(markdown, tokenizer_name)
+        selected_tokens = tokens[:max_tokens]
+        content = decode_tokens(selected_tokens, tokenizer_name)
+        if not content.strip():
+            raise EmptyContentError(f"no content fit the max_tokens budget for {final_url}")
+        title = "" if is_document else extract_title(crawl_metadata, html)
+        metadata: dict[str, str | None] | None
+        if not include_metadata:
+            metadata = None
+        elif is_document:
+            metadata = {"description": None, "author": None, "published_date": None}
+        else:
+            metadata = extract_metadata(crawl_metadata, html)
+        return ScrapeResult(
+            url=final_url,
+            title=title,
+            query=public_query,
+            chunks=[{"chunk_id": "1", "text": content, "tokens": len(selected_tokens)}],
+            content_tokens=len(selected_tokens),
+            truncated=len(tokens) > max_tokens,
+            retrieved_at=utc_iso8601_z(),
+            metadata=metadata,
+        )
 
     chunks = chunk_text(
         text=markdown,
@@ -159,7 +189,7 @@ async def run_scrape_pipeline(
     return ScrapeResult(
         url=final_url,
         title=title,
-        query=cleaned_query,
+        query=public_query,
         chunks=selected,
         content_tokens=content_tokens,
         truncated=truncated,

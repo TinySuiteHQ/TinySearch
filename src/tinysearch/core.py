@@ -10,6 +10,7 @@ pipeline) lives here exactly once.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import Any
 
@@ -118,19 +119,35 @@ async def research(query: str, *, config: ConfigInput | None = None) -> dict[str
 
 async def scrape_url(
     url: str,
-    query: str,
+    query: str | None = None,
     *,
     max_tokens: int = DEFAULT_SCRAPE_MAX_TOKENS,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
-    """Crawl a specific URL and return structured evidence ranked against the query.
+    """Extract a URL in page order, or rank it only when ``query`` is supplied.
 
     `config`, if given, overrides the on-disk/env-driven config for this call
     only (see `_resolve_config`).
     """
     config = _resolve_config(config)
-    await _ensure_local_bundle_for_config(config)
+    if (query or "").strip() not in {"", "*"}:
+        await _ensure_local_bundle_for_config(config)
     await _ensure_browser_bundle()
+    return await _scrape_url_with_config(
+        url,
+        query,
+        max_tokens=max_tokens,
+        config=config,
+    )
+
+
+async def _scrape_url_with_config(
+    url: str,
+    query: str | None,
+    *,
+    max_tokens: int,
+    config: dict[str, Any],
+) -> dict[str, Any]:
     scrape_result = await run_scrape_pipeline(
         url,
         query,
@@ -159,3 +176,66 @@ async def scrape_url(
             "truncated": scrape_result.truncated,
         },
     )
+
+
+async def scrape_urls(
+    items: Sequence[Mapping[str, Any]],
+    *,
+    max_tokens: int = DEFAULT_SCRAPE_MAX_TOKENS,
+    config: ConfigInput | None = None,
+) -> dict[str, Any]:
+    """Scrape up to five URL/query pairs concurrently.
+
+    Each item needs ``url`` and may omit ``query`` (or set it to ``'*'``) for
+    first-token page-order extraction. Repeat a URL in separate items when it
+    needs distinct focused queries; the five-item cap bounds total work.
+    """
+    if not 1 <= len(items) <= 5:
+        raise ValueError("items must contain between 1 and 5 URL/query pairs")
+    if max_tokens <= 0:
+        raise ValueError("max_tokens must be positive")
+    normalized: list[tuple[str, str | None]] = []
+    for item in items:
+        url = item.get("url")
+        query = item.get("query")
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError("every batch item requires a non-empty url")
+        if query is not None and not isinstance(query, str):
+            raise ValueError("batch item query must be a string, null, or omitted")
+        normalized.append((url, query))
+
+    resolved = _resolve_config(config)
+    if any((query or "").strip() not in {"", "*"} for _, query in normalized):
+        await _ensure_local_bundle_for_config(resolved)
+    await _ensure_browser_bundle()
+    settled = await asyncio.gather(
+        *(
+            _scrape_url_with_config(
+                url,
+                query,
+                max_tokens=max_tokens,
+                config=resolved,
+            )
+            for url, query in normalized
+        ),
+        return_exceptions=True,
+    )
+    results: list[dict[str, Any]] = []
+    for (url, query), outcome in zip(normalized, settled, strict=True):
+        if isinstance(outcome, Exception):
+            results.append(
+                {
+                    "url": url,
+                    "query": (query or "*").strip() or "*",
+                    "status": "error",
+                    "error": {"code": type(outcome).__name__, "message": str(outcome)},
+                }
+            )
+        else:
+            results.append({"status": "ok", "result": outcome})
+    return {
+        "schema_version": "1",
+        "operation": "scrape_batch",
+        "status": "partial" if any(item["status"] == "error" for item in results) else "ok",
+        "results": results,
+    }

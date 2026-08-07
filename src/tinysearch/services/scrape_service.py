@@ -199,7 +199,7 @@ DocumentExtractFn = Callable[[str], tuple[str, str]]
 async def fetch_html_with_timeout(
     *,
     url: str,
-    query: str,
+    query: str | None,
     bm25_threshold: float,
     bm25_language: str,
     timeout_seconds: float,

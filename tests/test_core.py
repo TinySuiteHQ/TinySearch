@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 import tinysearch
 from tinysearch.config import DEFAULT_CONFIG, TinySearchConfig
-from tinysearch.core import _ensure_local_bundle_for_config
+from tinysearch.core import _ensure_local_bundle_for_config, scrape_urls
 from tinysearch.pipelines.research import ResearchResult
 from tinysearch.results import result_envelope
 
@@ -100,6 +100,24 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["sources"][0]["chunks"][0]["text"], "evidence")
         self.assertEqual(result["stats"]["content_tokens"], 1)
         json.dumps(result)
+
+    async def test_scrape_urls_returns_independent_partial_outcomes(self) -> None:
+        successful = _research_payload("*")
+        successful["operation"] = "scrape"
+        with patch(
+            "tinysearch.core._scrape_url_with_config",
+            side_effect=[successful, ValueError("bad URL")],
+        ), patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()), patch(
+            "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
+        ) as embeddings:
+            result = await scrape_urls(
+                [{"url": "https://one.example"}, {"url": "https://two.example", "query": "*"}]
+            )
+
+        self.assertEqual(result["status"], "partial")
+        self.assertEqual(result["results"][0]["status"], "ok")
+        self.assertEqual(result["results"][1]["error"]["message"], "bad URL")
+        embeddings.assert_not_awaited()
 
     async def test_ensure_local_bundle_skips_non_onnx_backend(self) -> None:
         with patch(

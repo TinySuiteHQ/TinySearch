@@ -161,7 +161,8 @@ This MCP server exposes four tools:
 1. get_current_datetime()
 2. search(query, limit=10)
 3. research(query)
-4. scrape_url(url, query)
+4. scrape_url(url, query="*")
+5. scrape_urls(items)
 
 Before calling research for time-sensitive questions, or if you need to add
 year/month/day context to a query, call get_current_datetime() first to orient
@@ -181,11 +182,10 @@ Use research when you need to discover and compare page content. It searches,
 ranks search results with dense embeddings and BM25, crawls kept pages, ranks
 page chunks, and returns a grounded prompt in the tool response directly.
 
-Use scrape_url after a URL is already known: either the user provided it, or a
-previous research result identified the page to inspect. It crawls the page,
-extracts clean markdown, ranks chunks against the query, and returns a grounded
-XML answer prompt directly. The caller's LLM should answer from that prompt and
-cite the source URLs it contains.
+Use scrape_url after a URL is already known. Omit query or pass `*` to receive
+the first 4,000 tokens of clean Markdown in page order. Supply a focused query
+only when relevant chunks should be selected. Use scrape_urls for up to five
+independent URL/query pairs in one batch.
 """.strip()
 
 
@@ -330,10 +330,8 @@ async def research(
     title="Scrape URL",
     description=(
         "Inspect a specific URL and return a grounded XML answer prompt containing "
-        "the page content most relevant to the requested query. Use this after "
-        "the user provides a URL or research already identified the page to "
-        "inspect. Formulate a focused retrieval query for the information needed "
-        "from that page."
+        "clean page content. Omit query or use '*' for the first 4,000 page-order "
+        "tokens; supply a focused query only to select relevant chunks."
     ),
 )
 async def scrape_url_tool(
@@ -347,17 +345,20 @@ async def scrape_url_tool(
         ),
     ],
     query: Annotated[
-        str,
+        str | None,
         Field(
             description=(
-                "What information to find within this page. Formulate a focused "
-                "retrieval query appropriate to the content needed from the URL."
+                "Optional focused question for ranking page chunks. Omit or set '*' "
+                "to return the first 4,000 clean-Markdown tokens in page order."
             )
         ),
-    ],
+    ] = "*",
+    max_tokens: Annotated[
+        int,
+        Field(ge=1, description="Maximum returned tokens; defaults to 4,000."),
+    ] = DEFAULT_SCRAPE_MAX_TOKENS,
 ) -> str:
     started = time.monotonic()
-    max_tokens = DEFAULT_SCRAPE_MAX_TOKENS
     _log(f"scrape_url called url={url!r} query={query!r} max_tokens={max_tokens}")
     try:
         config = load_tinysearch_config()
@@ -383,6 +384,33 @@ async def scrape_url_tool(
         f"elapsed={elapsed:.2f}s"
     )
     return answer
+
+
+@mcp.tool(
+    name="scrape_urls",
+    title="Scrape URLs",
+    description=(
+        "Batch up to five URL/query pairs. Each item has url and optional query; "
+        "omit query or use '*' for page-order content, or provide a focused query "
+        "to rank chunks. Returns each item's success or error independently."
+    ),
+)
+async def scrape_urls_tool(
+    items: Annotated[
+        list[dict[str, str | None]],
+        Field(description="One to five items, each with url and optional query."),
+    ],
+    max_tokens: Annotated[
+        int,
+        Field(ge=1, description="Maximum tokens for each item; defaults to 4,000."),
+    ] = DEFAULT_SCRAPE_MAX_TOKENS,
+) -> dict[str, Any]:
+    _log(f"scrape_urls called items={len(items)} max_tokens={max_tokens}")
+    return await core.scrape_urls(
+        items,
+        max_tokens=max_tokens,
+        config=load_tinysearch_config(),
+    )
 
 
 def main() -> None:

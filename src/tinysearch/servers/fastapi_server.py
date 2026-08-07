@@ -36,8 +36,19 @@ app = FastAPI(
 
 class ScrapeRequest(BaseModel):
     url: HttpUrl
-    query: str = Field(..., min_length=1)
+    query: str | None = None
+    max_tokens: int = Field(4000, ge=1)
     output_format: Literal["prompt", "json"] = "prompt"
+
+
+class ScrapeBatchItem(BaseModel):
+    url: HttpUrl
+    query: str | None = None
+
+
+class ScrapeBatchRequest(BaseModel):
+    items: list[ScrapeBatchItem] = Field(..., min_length=1, max_length=5)
+    max_tokens: int = Field(4000, ge=1)
 
 
 class ResearchRequest(BaseModel):
@@ -124,6 +135,7 @@ async def scrape_endpoint(request: ScrapeRequest) -> dict[str, Any]:
         result = await core.scrape_url(
             str(request.url),
             request.query,
+            max_tokens=request.max_tokens,
             config=load_tinysearch_config(),
         )
     except (InvalidUrlError, BlockedUrlError, ScrapeError) as exc:
@@ -145,6 +157,16 @@ async def scrape_endpoint(request: ScrapeRequest) -> dict[str, Any]:
         "truncated": result["stats"]["truncated"],
         "retrieved_at": result["retrieved_at"],
     }
+
+
+@app.post("/scrape/batch")
+async def scrape_batch_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
+    """Batch up to five independent URL/query scrapes with per-item outcomes."""
+    return await core.scrape_urls(
+        [item.model_dump(mode="json") for item in request.items],
+        max_tokens=request.max_tokens,
+        config=load_tinysearch_config(),
+    )
 
 
 @app.post("/research")

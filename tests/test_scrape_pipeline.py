@@ -139,6 +139,29 @@ def _fake_document_doc(url: str) -> tuple[str, str]:
 
 
 class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
+    async def test_omitted_query_returns_first_tokens_in_raw_page_order(self) -> None:
+        async def should_not_embed(_inputs: list[str]) -> list[list[float]]:
+            self.fail("raw page-order scrape must not create embeddings")
+
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                None,
+                config=_config(),
+                max_tokens=DEFAULT_SCRAPE_MAX_TOKENS,
+                embedder=should_not_embed,
+                crawl_fn=_fake_html_page,
+            )
+
+        self.assertEqual(result.query, "*")
+        self.assertEqual(len(result.chunks), 1)
+        self.assertIn("Section A", result.chunks[0]["text"])
+        self.assertIn("Section B", result.chunks[0]["text"])
+        self.assertNotIn("dense_score", result.chunks[0])
+
     async def test_uses_hybrid_embedding_ranking(self) -> None:
         embedded_inputs: list[str] = []
 

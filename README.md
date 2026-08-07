@@ -155,7 +155,8 @@ Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 | --- | --- |
 | `search(query, limit=10)` | You need fast, backend-ordered top-level discovery |
 | `research(query)` | The agent needs to discover and compare relevant sources |
-| `scrape_url(url, query)` | You already know which page should be inspected |
+| `scrape_url(url, query="*")` | You know a page; `*` returns its first clean 4k tokens in page order |
+| `scrape_urls(items)` | You need up to five independent URL/query scrapes in one batch |
 | `get_current_datetime()` | Research depends on the current date or time |
 
 TinySearch deliberately stays focused. It is a retrieval layer, not another
@@ -256,8 +257,11 @@ that evidence into an LLM prompt is explicit, so applications can store,
 inspect, transform, or budget the result first.
 
 The optional FastAPI app mirrors these surfaces: `POST /search` accepts
-`query`, `limit` (1–50), and `output_format` (`prompt` or `json`); the deep
-`/research` and `/scrape` endpoints retain their existing contracts.
+`query`, `limit` (1–50), and `output_format` (`prompt` or `json`). `POST
+/scrape` accepts an optional query: omit it or use `"*"` for the first clean
+4,000 tokens in page order; provide a query only for focused chunk selection.
+`POST /scrape/batch` accepts one to five `{ "url", "query" }` items and
+returns an independent outcome for each.
 
 ## Search backends
 
