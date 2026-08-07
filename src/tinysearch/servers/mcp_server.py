@@ -166,10 +166,10 @@ Before calling research for time-sensitive questions, or if you need to add
 year/month/day context to a query, call get_current_datetime() first to orient
 on the current date and time (UTC).
 
-Pass the user's question as-is in query. Do not rewrite, correct spelling,
-expand abbreviations, add dates, add missing context, simplify, translate, or
-otherwise improve the user's wording before calling either tool, unless temporal
-augmentation is genuinely needed after checking get_current_datetime().
+Formulate queries for effective retrieval. You may rewrite, clarify terminology,
+correct spelling, expand abbreviations, add relevant temporal context, translate,
+or narrow the request when useful. Preserve important names, constraints,
+qualifiers, negations, and the user's underlying intent.
 
 Use research first when you need to discover relevant URLs. It searches the web
 through the configured backend (SearXNG by default, with a DuckDuckGo fallback),
@@ -236,8 +236,9 @@ async def get_current_datetime_tool() -> dict[str, str]:
     description=(
         "Discover relevant URLs for the user's question, crawl ranked pages, "
         "and return a search-grounded XML answer prompt directly. "
-        "Use this first when you need to find sources. "
-        "Pass the user's question as-is. For time-sensitive or relative-date "
+        "Use this first when you need to find sources. Formulate the query "
+        "for effective retrieval while preserving the user's important "
+        "constraints and intent. For time-sensitive or relative-date "
         "questions, call get_current_datetime() first unless you already "
         "know the current date and time."
     ),
@@ -247,8 +248,9 @@ async def research(
         str,
         Field(
             description=(
-                "The user's question, passed exactly as written. Use this for "
-                "open-ended discovery when you need to find relevant URLs."
+                "A search/research query describing the information to find. "
+                "Rewrite or refine it as needed for effective retrieval while "
+                "preserving important names, constraints, qualifiers, and intent."
             )
         ),
     ],
@@ -281,7 +283,8 @@ async def research(
         "Inspect a specific URL and return a grounded XML answer prompt containing "
         "the page content most relevant to the requested query. Use this after "
         "the user provides a URL or research already identified the page to "
-        "inspect. Pass the user's query without rewriting it."
+        "inspect. Formulate a focused retrieval query for the information needed "
+        "from that page."
     ),
 )
 async def scrape_url_tool(
@@ -298,8 +301,8 @@ async def scrape_url_tool(
         str,
         Field(
             description=(
-                "The user's question, passed exactly as written. The page is "
-                "ranked against this query."
+                "What information to find within this page. Formulate a focused "
+                "retrieval query appropriate to the content needed from the URL."
             )
         ),
     ],
