@@ -134,10 +134,9 @@ client:
 The client launches TinySearch over stdio when it needs it. No repository
 clone, hosted account, or paid search key is required.
 
-On first launch, TinySearch installs Chromium and downloads the local
-embedding model before it starts accepting requests, a one-time delay of a
-minute or two. To avoid that delay on the first real query, pre-warm both
-ahead of time:
+Fast `search` starts without Chromium or an embedding model. Deep `research`
+and `scrape_url` initialize those dependencies on their first use; pre-warm
+both ahead of time if you will use the deep workflows:
 
 ```bash
 uvx --from "tinysuite-search[server]" tinysearch setup
@@ -150,10 +149,11 @@ uvx --from "tinysuite-search[server]" tinysearch setup
 Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 [installation guide](https://tinysuite.dev/docs/tinysearch/).
 
-## Three focused tools
+## Four focused tools
 
 | Tool | Use it when |
 | --- | --- |
+| `search(query, limit=10)` | You need fast, backend-ordered top-level discovery |
 | `research(query)` | The agent needs to discover and compare relevant sources |
 | `scrape_url(url, query)` | You already know which page should be inspected |
 | `get_current_datetime()` | Research depends on the current date or time |
@@ -166,8 +166,9 @@ for parameters and response contracts.
 
 ## What your agent gets
 
-TinySearch does not spend another model call writing the final answer. It gives
-your existing agent ranked, source-grounded evidence to reason over.
+TinySearch does not spend another model call writing the final answer. Use
+`search` for a lightweight list of titles, URLs, previews, and upstream dates;
+use `research` when your agent needs ranked, source-grounded page evidence.
 
 An abridged structured result looks like this:
 
@@ -215,11 +216,11 @@ themselves.
 
 ## How it works
 
-1. Search the web with DDGS or your own SearXNG instance.
-2. Hybrid-rank the search results to choose which pages are worth reading.
-3. Crawl those pages in parallel and extract readable content.
-4. Chunk, deduplicate, and hybrid-rank the combined evidence pool.
-5. Return the best passages with their titles, URLs, ranks, and scores.
+1. `search` returns backend-ordered discovery results directly, without crawling
+   or ranking them locally.
+2. `research` searches the web with DDGS or your own SearXNG instance.
+3. It hybrid-ranks search results, crawls selected pages, then ranks and returns
+   the best evidence passages.
 
 Dense and lexical ranking happen before the evidence reaches your model. The
 model gets a small, relevant research packet rather than a pile of raw pages.
@@ -234,10 +235,13 @@ pip install tinysuite-search
 
 ```python
 import asyncio
-from tinysearch import research, to_prompt
+from tinysearch import search, research, to_prompt
 
 
 async def main():
+    results = await search("Python async tasks")
+    print(results["results"])
+
     evidence = await research("How does asyncio cancellation work?")
 
     print(evidence["sources"])
@@ -250,6 +254,10 @@ asyncio.run(main())
 The Python API returns a stable, JSON-serializable evidence schema. Rendering
 that evidence into an LLM prompt is explicit, so applications can store,
 inspect, transform, or budget the result first.
+
+The optional FastAPI app mirrors these surfaces: `POST /search` accepts
+`query`, `limit` (1–50), and `output_format` (`prompt` or `json`); the deep
+`/research` and `/scrape` endpoints retain their existing contracts.
 
 ## Search backends
 
@@ -336,7 +344,7 @@ across Linux, macOS, and Windows.
 
 ## Entrypoints
 
-- `tinysearch.research` and `tinysearch.scrape_url`: structured Python API
+- `tinysearch.search`, `tinysearch.research`, and `tinysearch.scrape_url`: structured Python API
 - `tinysearch.to_prompt`: pure structured-evidence prompt renderer
 - `tinysearch mcp`: stdio MCP server (also the no-argument default)
 - `tinysearch serve`: Streamable HTTP MCP server

@@ -156,11 +156,12 @@ async def _run_streamable_http_combined_async() -> None:
 
 
 MCP_INSTRUCTIONS = """
-This MCP server exposes three tools:
+This MCP server exposes four tools:
 
 1. get_current_datetime()
-2. research(query)
-3. scrape_url(url, query)
+2. search(query, limit=10)
+3. research(query)
+4. scrape_url(url, query)
 
 Before calling research for time-sensitive questions, or if you need to add
 year/month/day context to a query, call get_current_datetime() first to orient
@@ -171,11 +172,14 @@ correct spelling, expand abbreviations, add relevant temporal context, translate
 or narrow the request when useful. Preserve important names, constraints,
 qualifiers, negations, and the user's underlying intent.
 
-Use research first when you need to discover relevant URLs. It searches the web
-through the configured backend (SearXNG by default, with a DuckDuckGo fallback),
-ranks search results with dense embeddings and BM25 using reciprocal rank
-fusion, crawls kept pages, ranks page chunks, and returns a grounded prompt in
-the tool response directly.
+Use search first for fast top-level discovery. It returns the configured
+backend's results in backend order with titles, URLs, previews, and upstream
+publication dates when available. It does not embed, rerank, crawl, or ground
+the results.
+
+Use research when you need to discover and compare page content. It searches,
+ranks search results with dense embeddings and BM25, crawls kept pages, ranks
+page chunks, and returns a grounded prompt in the tool response directly.
 
 Use scrape_url after a URL is already known: either the user provided it, or a
 previous research result identified the page to inspect. It crawls the page,
@@ -228,6 +232,51 @@ mcp = FastMCP(
 async def get_current_datetime_tool() -> dict[str, str]:
     _log("get_current_datetime called")
     return core.get_current_datetime()
+
+
+@mcp.tool(
+    name="search",
+    title="Search",
+    description=(
+        "Fast top-level discovery. Return backend-ordered web results with titles, "
+        "URLs, previews, and upstream dates when available. Does not crawl or rerank."
+    ),
+)
+async def search_tool(
+    query: Annotated[
+        str,
+        Field(
+            description=(
+                "A search query describing the information to find. Refine it for "
+                "effective retrieval while preserving names, constraints, and intent."
+            )
+        ),
+    ],
+    limit: Annotated[
+        int,
+        Field(ge=1, le=50, description="Maximum results to return; defaults to 10."),
+    ] = 10,
+) -> str:
+    started = time.monotonic()
+    _log(f"search called query={query!r} limit={limit}")
+    try:
+        result = await core.search(
+            query,
+            limit=limit,
+            config=load_tinysearch_config(),
+        )
+    except Exception as exc:
+        elapsed = time.monotonic() - started
+        _log(f"search failed elapsed={elapsed:.2f}s error={exc!r}")
+        raise ValueError(f"search_backend_error: {exc}") from exc
+    from tinysearch.prompts import to_prompt
+
+    answer = to_prompt(result)
+    _log(
+        f"search returning results={result['stats']['result_count']} "
+        f"backend={result['backend']!r} elapsed={time.monotonic() - started:.2f}s"
+    )
+    return answer
 
 
 @mcp.tool(
@@ -338,13 +387,6 @@ async def scrape_url_tool(
 
 def main() -> None:
     _enable_traceback_dump()
-    cfg = load_tinysearch_config()
-    asyncio.run(core._ensure_local_bundle_for_config(cfg))
-
-    from tinysearch.services.browser_bundle_service import ensure_chromium_sync
-
-    ensure_chromium_sync()
-
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError(

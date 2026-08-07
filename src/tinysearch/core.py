@@ -1,4 +1,4 @@
-"""The three operations TinySearch exposes, independent of transport.
+"""The four operations TinySearch exposes, independent of transport.
 
 `servers/mcp_server.py` and `servers/fastapi_server.py` are thin adapters
 around these functions: they add transport-specific request/response schemas,
@@ -21,7 +21,11 @@ from tinysearch.services.current_datetime_service import current_datetime_payloa
 from tinysearch.services.embedding_service import normalize_embedding_backend
 from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
 from tinysearch.services.tinysearch_config_service import normalize_query
-from tinysearch.services.web_search_service import search
+from tinysearch.services.web_search_service import (
+    filter_blocked_search_results,
+    search as web_search,
+    search_with_metadata,
+)
 
 get_current_datetime = current_datetime_payload
 
@@ -46,6 +50,53 @@ async def _ensure_local_bundle_for_config(config: dict[str, Any]) -> None:
     await asyncio.to_thread(ensure_onnx_bundle_sync, str(config["embedding_model"]))
 
 
+async def _ensure_browser_bundle() -> None:
+    from tinysearch.services.browser_bundle_service import ensure_chromium_sync
+
+    await asyncio.to_thread(ensure_chromium_sync)
+
+
+async def search(
+    query: str,
+    *,
+    limit: int = 10,
+    config: ConfigInput | None = None,
+) -> dict[str, Any]:
+    """Return raw, backend-ordered discovery results without deep research work."""
+    query = normalize_query(query)
+    if not 1 <= limit <= 50:
+        raise ValueError("limit must be between 1 and 50")
+    resolved_config = _resolve_config(config)
+    response = search_with_metadata(query, limit, config=resolved_config)
+    results = filter_blocked_search_results(
+        [
+            result
+            for result in response.results
+            if result.url.lower().startswith(("http://", "https://"))
+        ],
+        resolved_config["blocked_domains"],
+    )
+    return {
+        "schema_version": "1",
+        "operation": "search",
+        "status": "ok",
+        "query": query,
+        "backend": response.backend,
+        "results": [
+            {
+                "rank": rank,
+                "title": result.title,
+                "url": result.url,
+                "preview": result.text,
+                "published_at": result.published_at,
+            }
+            for rank, result in enumerate(results, start=1)
+        ],
+        "errors": [],
+        "stats": {"result_count": len(results)},
+    }
+
+
 async def research(query: str, *, config: ConfigInput | None = None) -> dict[str, Any]:
     """Discover relevant URLs, crawl and rank them, and return structured evidence.
 
@@ -56,10 +107,11 @@ async def research(query: str, *, config: ConfigInput | None = None) -> dict[str
     query = normalize_query(query)
     resolved_config = _resolve_config(config)
     await _ensure_local_bundle_for_config(resolved_config)
+    await _ensure_browser_bundle()
     result = await run_research_pipeline(
         query,
         config=resolved_config,
-        search_fn=partial(search, config=resolved_config),
+        search_fn=partial(web_search, config=resolved_config),
     )
     return result.to_dict()
 
@@ -78,6 +130,7 @@ async def scrape_url(
     """
     config = _resolve_config(config)
     await _ensure_local_bundle_for_config(config)
+    await _ensure_browser_bundle()
     scrape_result = await run_scrape_pipeline(
         url,
         query,

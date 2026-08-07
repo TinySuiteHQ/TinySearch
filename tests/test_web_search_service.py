@@ -26,6 +26,7 @@ from tinysearch.services.web_search_service import (
     is_blocked_domain,
     normalize_domain,
     search,
+    search_with_metadata,
 )
 
 
@@ -200,6 +201,23 @@ class SearXNGBackendTests(unittest.TestCase):
         self.assertEqual(results[0].result_id, 1)
         self.assertEqual(results[1].result_id, 2)
 
+    def test_searxng_maps_upstream_published_date(self) -> None:
+        payload = {
+            "results": [{
+                "title": "Dated",
+                "url": "https://example.com/dated",
+                "content": "Preview",
+                "publishedDate": "2026-08-01T12:00:00+00:00",
+            }]
+        }
+        with patch.object(
+            web_search_service,
+            "urlopen",
+            new=_make_urlopen_returning(json.dumps(payload)),
+        ):
+            results = _searxng_search("dated", 10, url="http://searxng:8080/search")
+        self.assertEqual(results[0].published_at, "2026-08-01T12:00:00+00:00")
+
     def test_searxng_respects_limit(self) -> None:
         payload = {
             "results": [
@@ -215,6 +233,23 @@ class SearXNGBackendTests(unittest.TestCase):
             results = _searxng_search("q", 3, url="http://searxng:8080/search")
 
         self.assertEqual(len(results), 3)
+
+    def test_metadata_reports_the_fallback_backend(self) -> None:
+        fallback = [SearchResult(1, "Fallback", "https://example.com", "Preview")]
+        with patch.object(
+            web_search_service,
+            "_searxng_search",
+            side_effect=SearchBackendUnavailable("down"),
+        ), patch.object(web_search_service, "_ddgs_search", return_value=fallback):
+            response = search_with_metadata(
+                "q",
+                config={
+                    "search_backend": "searxng",
+                    "search_backend_fallback": True,
+                },
+            )
+        self.assertEqual(response.backend, "duckduckgo")
+        self.assertEqual(response.results, fallback)
 
     def test_searxng_html_response_raises_unavailable_with_actionable_message(self) -> None:
         with patch.object(

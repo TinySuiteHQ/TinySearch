@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
@@ -24,18 +23,14 @@ def _tinysearch_version() -> str:
     return os.environ.get("TINYSEARCH_VERSION", "dev").strip() or "dev"
 
 
-@asynccontextmanager
-async def _lifespan(_app: FastAPI):
-    cfg = load_tinysearch_config()
-    await core._ensure_local_bundle_for_config(cfg)
-    yield
-
-
 app = FastAPI(
     title="TinySearch API",
-    description="HTTP API mirroring the TinySearch MCP tools.",
+    description=(
+        "HTTP API mirroring the TinySearch MCP tools. POST /search provides "
+        "fast backend-ordered discovery; /research and /scrape provide deep "
+        "grounded retrieval."
+    ),
     version=_tinysearch_version(),
-    lifespan=_lifespan,
 )
 
 
@@ -47,6 +42,12 @@ class ScrapeRequest(BaseModel):
 
 class ResearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
+    output_format: Literal["prompt", "json"] = "prompt"
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1)
+    limit: int = Field(10, ge=1, le=50)
     output_format: Literal["prompt", "json"] = "prompt"
 
 
@@ -149,6 +150,30 @@ async def scrape_endpoint(request: ScrapeRequest) -> dict[str, Any]:
 @app.post("/research")
 async def research_endpoint(request: ResearchRequest) -> dict[str, Any]:
     result = await core.research(request.query, config=load_tinysearch_config())
+    if request.output_format == "json":
+        return result
+    from tinysearch.prompts import to_prompt
+
+    return {"answer": to_prompt(result)}
+
+
+@app.post("/search")
+async def search_endpoint(request: SearchRequest) -> dict[str, Any]:
+    try:
+        result = await core.search(
+            request.query,
+            limit=request.limit,
+            config=load_tinysearch_config(),
+        )
+    except Exception as exc:
+        from tinysearch.services.web_search_service import SearchBackendError
+
+        if isinstance(exc, SearchBackendError):
+            raise HTTPException(
+                status_code=502,
+                detail={"code": "search_backend_error", "message": str(exc)},
+            ) from exc
+        raise
     if request.output_format == "json":
         return result
     from tinysearch.prompts import to_prompt

@@ -26,7 +26,7 @@ def _legacy_source(source: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def to_prompt(result: Mapping[str, Any], *, today: str | None = None) -> str:
-    """Render a schema-v1 research or scrape result as a grounded LLM prompt."""
+    """Render a schema-v1 result as raw search text or a grounded prompt."""
     version = str(result.get("schema_version") or "")
     if version != SCHEMA_VERSION:
         raise ValueError(
@@ -35,6 +35,26 @@ def to_prompt(result: Mapping[str, Any], *, today: str | None = None) -> str:
         )
     operation = str(result.get("operation") or "")
     question = str(result.get("query") or "")
+    if operation == "search":
+        rows = [f"Search results for: {question}"]
+        raw_results = result.get("results")
+        for ordinal, item in enumerate(raw_results if isinstance(raw_results, list) else [], start=1):
+            if not isinstance(item, Mapping):
+                continue
+            rank = item.get("rank")
+            label = int(rank) if isinstance(rank, int) else ordinal
+            rows.extend(
+                [
+                    f"{label}. {str(item.get('title') or '').strip()}",
+                    f"URL: {str(item.get('url') or '').strip()}",
+                    f"Preview: {str(item.get('preview') or '').strip()}",
+                ]
+            )
+            published_at = item.get("published_at")
+            if published_at:
+                rows.append(f"Published: {str(published_at).strip()}")
+            rows.append("")
+        return "\n".join(rows).rstrip()
     raw_sources = result.get("sources")
     sources = (
         [_legacy_source(source) for source in raw_sources if isinstance(source, Mapping)]

@@ -31,6 +31,7 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         run = AsyncMock(return_value=ResearchResult(_research_payload()))
         with patch("tinysearch.core.run_research_pipeline", new=run), patch(
             "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
+        ), patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()
         ):
             result = await tinysearch.research("  hello  ")
 
@@ -44,6 +45,7 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         run = AsyncMock(return_value=ResearchResult(_research_payload()))
         with patch("tinysearch.core.run_research_pipeline", new=run), patch(
             "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
+        ), patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()
         ):
             await tinysearch.research(
                 "hello",
@@ -58,6 +60,7 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         run = AsyncMock(return_value=ResearchResult(_research_payload()))
         with patch("tinysearch.core.run_research_pipeline", new=run), patch(
             "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
+        ), patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()
         ):
             await tinysearch.research("hello", config={"search_region": "uk-en"})
 
@@ -87,7 +90,9 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         with patch(
             "tinysearch.core.run_scrape_pipeline",
             new=AsyncMock(return_value=scrape_result),
-        ), patch("tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()):
+        ), patch("tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()), patch(
+            "tinysearch.core._ensure_browser_bundle", new=AsyncMock()
+        ):
             result = await tinysearch.scrape_url("https://example.com/x", "q")
 
         self.assertEqual(result["schema_version"], "1")

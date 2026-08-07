@@ -53,6 +53,15 @@ class SearchResult:
     title: str
     url: str
     text: str
+    published_at: str | None = None
+
+
+@dataclass(frozen=True)
+class SearchResponse:
+    """Backend results plus the backend that ultimately supplied them."""
+
+    results: list[SearchResult]
+    backend: str
 
 
 class SearchBackendError(Exception):
@@ -178,6 +187,7 @@ def _ddgs_search(
         title = str(item.get("title") or "").strip()
         target = str(item.get("href") or "").strip()
         text_field = str(item.get("body") or "").strip()
+        published_at = _published_at(item)
         if not title or not target:
             continue
         out.append(
@@ -186,6 +196,7 @@ def _ddgs_search(
                 title=title,
                 url=target,
                 text=text_field,
+                published_at=published_at,
             )
         )
         if len(out) >= limit:
@@ -249,6 +260,7 @@ def _brave_search(
         title = str(item.get("title") or "").strip()
         target = str(item.get("url") or "").strip()
         text_field = str(item.get("description") or "").strip()
+        published_at = _published_at(item)
         if not title or not target:
             continue
         out.append(
@@ -257,6 +269,7 @@ def _brave_search(
                 title=title,
                 url=target,
                 text=text_field,
+                published_at=published_at,
             )
         )
         if len(out) >= limit:
@@ -296,6 +309,32 @@ def _with_brave_fallback(
     return _brave_search(query, limit, api_key=api_key)
 
 
+def _with_brave_fallback_with_metadata(
+    primary: Callable[[], list[SearchResult]],
+    query: str,
+    limit: int,
+    *,
+    primary_backend: str,
+) -> SearchResponse:
+    """Metadata-preserving variant of the legacy list-returning fallback."""
+    api_key = _read_brave_api_key()
+    try:
+        results = primary()
+    except SearchBackendError as primary_exc:
+        if not api_key:
+            raise
+        try:
+            return SearchResponse(_brave_search(query, limit, api_key=api_key), "brave")
+        except SearchBackendError as brave_exc:
+            raise SearchBackendUnavailable(
+                f"{primary_backend} failed ({type(primary_exc).__name__}); "
+                f"brave failed ({type(brave_exc).__name__})"
+            ) from primary_exc
+    if results or not api_key:
+        return SearchResponse(results, primary_backend)
+    return SearchResponse(_brave_search(query, limit, api_key=api_key), "brave")
+
+
 def _normalize_engines(engines: Any) -> str:
     if engines is None:
         return ""
@@ -306,6 +345,20 @@ def _normalize_engines(engines: Any) -> str:
     else:
         parts = [str(engines).strip()]
     return ",".join(part for part in parts if part)
+
+
+def _published_at(item: dict[str, Any]) -> str | None:
+    """Return an upstream result date without deriving or fetching one."""
+    for key in ("publishedDate", "published_at", "date", "published", "pubdate"):
+        value = item.get(key)
+        if value is None:
+            continue
+        if hasattr(value, "isoformat"):
+            value = value.isoformat()
+        value = str(value).strip()
+        if value:
+            return value
+    return None
 
 
 def _searxng_search(
@@ -378,6 +431,7 @@ def _searxng_search(
         title = str(item.get("title") or "").strip()
         target = str(item.get("url") or "").strip()
         text_field = str(item.get("content") or "").strip()
+        published_at = _published_at(item)
         if not title or not target:
             continue
         out.append(
@@ -386,6 +440,7 @@ def _searxng_search(
                 title=title,
                 url=target,
                 text=text_field,
+                published_at=published_at,
             )
         )
         if len(out) >= limit:
@@ -401,12 +456,12 @@ def _load_search_config() -> dict[str, Any]:
     return load_tinysearch_config()
 
 
-def _dispatch_search(
+def _dispatch_search_with_metadata(
     query: str,
     limit: int,
     *,
     config: dict[str, Any],
-) -> list[SearchResult]:
+) -> SearchResponse:
     backend = str(config.get("search_backend") or "searxng").strip().lower()
     if backend not in ALLOWED_SEARCH_BACKENDS:
         backend = "searxng"
@@ -422,7 +477,7 @@ def _dispatch_search(
     ddgs_timeout = float(config.get("ddgs_timeout_seconds") or _DEFAULT_DDGS_TIMEOUT)
 
     if backend == "ddgs":
-        return _with_brave_fallback(
+        return _with_brave_fallback_with_metadata(
             lambda: _ddgs_search(
                 query,
                 limit,
@@ -432,38 +487,50 @@ def _dispatch_search(
             ),
             query,
             limit,
+            primary_backend="ddgs",
         )
 
     if backend == "duckduckgo":
-        return _with_brave_fallback(
+        return _with_brave_fallback_with_metadata(
             lambda: _ddgs_search(
                 query, limit, region=str(region) or None, backend="duckduckgo", timeout=ddgs_timeout
             ),
             query,
             limit,
+            primary_backend="duckduckgo",
         )
 
     if backend == "auto":
         try:
-            return _searxng_search(
+            return SearchResponse(_searxng_search(
                 query, limit, url=url, engines=engines, region=str(region) or None
-            )
+            ), "searxng")
         except SearchBackendError:
-            return _ddgs_search(
+            return SearchResponse(_ddgs_search(
                 query, limit, region=str(region) or None, backend="duckduckgo", timeout=ddgs_timeout
-            )
+            ), "duckduckgo")
 
     # backend == "searxng"
     try:
-        return _searxng_search(
+        return SearchResponse(_searxng_search(
             query, limit, url=url, engines=engines, region=str(region) or None
-        )
+        ), "searxng")
     except SearchBackendError:
         if fallback_enabled:
-            return _ddgs_search(
+            return SearchResponse(_ddgs_search(
                 query, limit, region=str(region) or None, backend="duckduckgo", timeout=ddgs_timeout
-            )
+            ), "duckduckgo")
         raise
+
+
+def _dispatch_search(
+    query: str,
+    limit: int,
+    *,
+    config: dict[str, Any],
+) -> list[SearchResult]:
+    """Compatibility wrapper for the existing research pipeline."""
+    return _dispatch_search_with_metadata(query, limit, config=config).results
 
 
 def search(
@@ -482,6 +549,17 @@ def search(
     """
     resolved_config = _load_search_config() if config is None else config
     return _dispatch_search(query, limit, config=resolved_config)
+
+
+def search_with_metadata(
+    query: str,
+    limit: int = 10,
+    *,
+    config: dict[str, Any] | None = None,
+) -> SearchResponse:
+    """Run a search and report the backend that supplied its results."""
+    resolved_config = _load_search_config() if config is None else config
+    return _dispatch_search_with_metadata(query, limit, config=resolved_config)
 
 
 def search_to_markdown(search_results: list[SearchResult]) -> str:
