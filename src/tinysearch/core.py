@@ -117,30 +117,6 @@ async def research(query: str, *, config: ConfigInput | None = None) -> dict[str
     return result.to_dict()
 
 
-async def scrape_url(
-    url: str,
-    query: str | None = None,
-    *,
-    max_tokens: int = DEFAULT_SCRAPE_MAX_TOKENS,
-    config: ConfigInput | None = None,
-) -> dict[str, Any]:
-    """Extract a URL in page order, or rank it only when ``query`` is supplied.
-
-    `config`, if given, overrides the on-disk/env-driven config for this call
-    only (see `_resolve_config`).
-    """
-    config = _resolve_config(config)
-    if (query or "").strip() not in {"", "*"}:
-        await _ensure_local_bundle_for_config(config)
-    await _ensure_browser_bundle()
-    return await _scrape_url_with_config(
-        url,
-        query,
-        max_tokens=max_tokens,
-        config=config,
-    )
-
-
 async def _scrape_url_with_config(
     url: str,
     query: str | None,

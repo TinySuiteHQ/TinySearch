@@ -13,7 +13,7 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 
-EXPECTED_TOOLS = {"get_current_datetime", "research", "scrape_url"}
+EXPECTED_TOOLS = {"get_current_datetime", "research", "scrape_urls", "search"}
 
 
 async def smoke() -> None:

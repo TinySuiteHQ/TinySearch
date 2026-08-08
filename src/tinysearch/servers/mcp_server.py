@@ -17,12 +17,7 @@ from tinysearch.services.tinysearch_config_service import (
     load_tinysearch_config,
     tokenizer_name_for_config,
 )
-from tinysearch.services.scrape_service import (
-    SCRAPE_ERROR_MAP,
-    ScrapeError,
-)
 from tinysearch.services.token_counter_service import token_count
-from tinysearch.services.url_safety_service import BlockedUrlError, InvalidUrlError
 
 
 def _mcp_host() -> str:
@@ -155,13 +150,12 @@ async def _run_streamable_http_combined_async() -> None:
 
 
 MCP_INSTRUCTIONS = """
-This MCP server exposes five tools:
+This MCP server exposes four tools:
 
 1. get_current_datetime()
 2. search(query)
 3. research(query)
-4. scrape_url(url, query="*")
-5. scrape_urls(items)
+4. scrape_urls(items)
 
 Before calling research for time-sensitive questions, or if you need to add
 year/month/day context to a query, call get_current_datetime() first to orient
@@ -179,10 +173,10 @@ the results.
 
 The research tool is deprecated. Use search instead.
 
-Use scrape_url after a URL is already known. Omit query or pass `*` to receive
-the configured 2,000-token budget of clean Markdown in page order. Supply a focused query
-only when relevant chunks should be selected. Use scrape_urls for up to five
-independent URL/query pairs in one batch.
+Use scrape_urls after URLs are already known. Pass one to five independent
+URL/query pairs. Omit an item's query or pass `*` to receive the configured
+2,000-token budget of clean Markdown in page order; supply a focused query
+only when relevant chunks should be selected.
 """.strip()
 
 
@@ -318,68 +312,10 @@ async def research(
 
 
 @mcp.tool(
-    name="scrape_url",
-    title="Scrape URL",
-    description=(
-        "Inspect a specific URL and return a grounded XML answer prompt containing "
-        "clean page content. Omit query or use '*' for the configured 2,000 page-order "
-        "tokens; supply a focused query only to select relevant chunks."
-    ),
-)
-async def scrape_url_tool(
-    url: Annotated[
-        str,
-        Field(
-            description=(
-                "The exact http(s) URL to inspect, supplied by the user or found "
-                "in a previous research result."
-            )
-        ),
-    ],
-    query: Annotated[
-        str | None,
-        Field(
-            description=(
-                "Optional focused question for ranking page chunks. Omit or set '*' "
-                "to return the configured 2,000 clean-Markdown tokens in page order."
-            )
-        ),
-    ] = "*",
-) -> str:
-    started = time.monotonic()
-    config = load_tinysearch_config()
-    max_tokens = config["scrape_max_tokens"]
-    _log(f"scrape_url called url={url!r} query={query!r} max_tokens={max_tokens}")
-    try:
-        result = await core.scrape_url(
-            url,
-            query,
-            max_tokens=max_tokens,
-            config=config,
-        )
-    except (InvalidUrlError, BlockedUrlError, ScrapeError) as exc:
-        elapsed = time.monotonic() - started
-        code = SCRAPE_ERROR_MAP.get(type(exc), ("internal_error", 500))[0]
-        _log(f"scrape_url failed elapsed={elapsed:.2f}s code={code} error={exc!r}")
-        raise ValueError(f"{code}: {exc}") from exc
-    elapsed = time.monotonic() - started
-    from tinysearch.prompts import to_prompt
-
-    answer = to_prompt(result)
-    _log(
-        f"scrape_url returning content_tokens={result['stats']['content_tokens']} "
-        f"answer_tokens={_answer_tokens(answer)} "
-        f"truncated={result['stats']['truncated']} "
-        f"elapsed={elapsed:.2f}s"
-    )
-    return answer
-
-
-@mcp.tool(
     name="scrape_urls",
     title="Scrape URLs",
     description=(
-        "Batch up to five URL/query pairs. Each item has url and optional query; "
+        "Inspect one to five URL/query pairs. Each item has url and optional query; "
         "omit query or use '*' for page-order content, or provide a focused query "
         "to rank chunks. Returns each item's success or error independently."
     ),

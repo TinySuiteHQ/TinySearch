@@ -76,7 +76,7 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
                 config={"search_backend": "not-a-backend"},
             )
 
-    async def test_scrape_url_returns_common_structured_shape(self) -> None:
+    async def test_scrape_urls_returns_single_item_in_common_batch_shape(self) -> None:
         scrape_result = SimpleNamespace(
             url="https://example.com/x",
             title="Title",
@@ -93,13 +93,16 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         ), patch("tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()), patch(
             "tinysearch.core._ensure_browser_bundle", new=AsyncMock()
         ):
-            result = await tinysearch.scrape_url("https://example.com/x", "q")
+            result = await tinysearch.scrape_urls([{"url": "https://example.com/x", "query": "q"}])
 
-        self.assertEqual(result["schema_version"], "1")
-        self.assertEqual(result["operation"], "scrape")
-        self.assertEqual(result["sources"][0]["chunks"][0]["text"], "evidence")
-        self.assertEqual(result["stats"]["content_tokens"], 1)
+        self.assertEqual(result["operation"], "scrape_batch")
+        self.assertEqual(result["results"][0]["status"], "ok")
+        self.assertEqual(result["results"][0]["result"]["sources"][0]["chunks"][0]["text"], "evidence")
+        self.assertEqual(result["results"][0]["result"]["stats"]["content_tokens"], 1)
         json.dumps(result)
+
+    def test_public_api_does_not_export_single_url_scraper(self) -> None:
+        self.assertFalse(hasattr(tinysearch, "scrape_url"))
 
     async def test_scrape_urls_returns_independent_partial_outcomes(self) -> None:
         successful = _research_payload("*")

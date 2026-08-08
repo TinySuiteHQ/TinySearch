@@ -1,4 +1,4 @@
-"""URL safety checks shared by /scrape and the MCP scrape_url tool.
+"""URL safety checks shared by the HTTP and MCP scrape APIs.
 
 Enforces the SSRF hardening required by upstream issue #10:
 

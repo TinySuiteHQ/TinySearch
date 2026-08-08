@@ -4,19 +4,13 @@ import os
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 from tinysearch import core
 from tinysearch.services.tinysearch_config_service import (
     load_tinysearch_config,
     save_tinysearch_config,
-    tokenizer_name_for_config,
 )
-from tinysearch.services.scrape_service import (
-    SCRAPE_ERROR_MAP,
-    ScrapeError,
-)
-from tinysearch.services.url_safety_service import BlockedUrlError, InvalidUrlError
 
 
 def _tinysearch_version() -> str:
@@ -34,19 +28,14 @@ app = FastAPI(
 )
 
 
-class ScrapeRequest(BaseModel):
-    url: HttpUrl
-    query: str | None = None
-    max_tokens: int = Field(4000, ge=1)
-    output_format: Literal["prompt", "json"] = "prompt"
-
-
 class ScrapeBatchItem(BaseModel):
     url: HttpUrl
     query: str | None = None
 
 
 class ScrapeBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     items: list[ScrapeBatchItem] = Field(..., min_length=1, max_length=5)
     max_tokens: int = Field(4000, ge=1)
 
@@ -115,53 +104,9 @@ async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
         ) from exc
 
 
-def _raise_scrape_http_error(exc: Exception) -> None:
-    mapping = SCRAPE_ERROR_MAP.get(type(exc))
-    if mapping is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"code": "internal_error", "message": "internal error"},
-        ) from exc
-    code, status_code = mapping
-    raise HTTPException(
-        status_code=status_code,
-        detail={"code": code, "message": str(exc)},
-    ) from exc
-
-
 @app.post("/scrape")
-async def scrape_endpoint(request: ScrapeRequest) -> dict[str, Any]:
-    try:
-        result = await core.scrape_url(
-            str(request.url),
-            request.query,
-            max_tokens=request.max_tokens,
-            config=load_tinysearch_config(),
-        )
-    except (InvalidUrlError, BlockedUrlError, ScrapeError) as exc:
-        _raise_scrape_http_error(exc)
-    if request.output_format == "json":
-        return result
-    from tinysearch.prompts import to_prompt
-    from tinysearch.services.token_counter_service import token_count
-
-    prompt = to_prompt(result)
-    source = result["sources"][0]
-    config = load_tinysearch_config()
-    return {
-        "answer": prompt,
-        "url": source["url"],
-        "title": source["title"],
-        "content_tokens": result["stats"]["content_tokens"],
-        "answer_tokens": token_count(prompt, tokenizer_name_for_config(config)),
-        "truncated": result["stats"]["truncated"],
-        "retrieved_at": result["retrieved_at"],
-    }
-
-
-@app.post("/scrape/batch")
-async def scrape_batch_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
-    """Batch up to five independent URL/query scrapes with per-item outcomes."""
+async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
+    """Scrape one to five independent URL/query pairs with per-item outcomes."""
     return await core.scrape_urls(
         [item.model_dump(mode="json") for item in request.items],
         max_tokens=request.max_tokens,
