@@ -226,9 +226,11 @@ mcp = FastMCP(
         "query."
     ),
 )
-async def get_current_datetime_tool() -> dict[str, str]:
+async def get_current_datetime_tool() -> str:
     _log("get_current_datetime called")
-    return core.get_current_datetime()
+    from tinysearch.services.grounded_prompt_service import format_current_datetime
+
+    return format_current_datetime(**core.get_current_datetime())
 
 
 @mcp.tool(
@@ -264,9 +266,9 @@ async def search_tool(
         elapsed = time.monotonic() - started
         _log(f"search failed elapsed={elapsed:.2f}s error={exc!r}")
         raise ValueError(f"search_backend_error: {exc}") from exc
-    from tinysearch.prompts import to_prompt
+    from tinysearch.services.grounded_prompt_service import format_search_results
 
-    answer = to_prompt(result)
+    answer = format_search_results(query=result["query"], results=result["results"])
     _log(
         f"search returning results={result['stats']['result_count']} "
         f"backend={result['backend']!r} elapsed={time.monotonic() - started:.2f}s"
@@ -387,15 +389,18 @@ async def scrape_urls_tool(
         list[dict[str, str | None]],
         Field(description="One to five items, each with url and optional query."),
     ],
-) -> dict[str, Any]:
+) -> str:
     config = load_tinysearch_config()
     max_tokens = config["scrape_max_tokens"]
     _log(f"scrape_urls called items={len(items)} max_tokens={max_tokens}")
-    return await core.scrape_urls(
+    result = await core.scrape_urls(
         items,
         max_tokens=max_tokens,
         config=config,
     )
+    from tinysearch.services.grounded_prompt_service import format_url_grounded_answers
+
+    return format_url_grounded_answers(results=result["results"])
 
 
 def main() -> None:

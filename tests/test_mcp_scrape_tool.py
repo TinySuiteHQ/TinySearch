@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from inspect import signature
 from unittest.mock import AsyncMock, patch
+from xml.etree import ElementTree
 
 from mcp import types
 
@@ -61,10 +62,26 @@ class ScrapeUrlToolTests(unittest.IsolatedAsyncioTestCase):
             result = await _fn(scrape_urls_tool)(
                 [{"url": "https://one.example"}, {"url": "https://two.example", "query": "pricing"}]
             )
-        self.assertEqual(result["operation"], "scrape_batch")
+        self.assertTrue(result.startswith("<url_grounded_answers "))
+        self.assertNotIn('"operation"', result)
         self.assertEqual(batch_mock.await_args.args[0][0], {"url": "https://one.example"})
         self.assertEqual(batch_mock.await_args.kwargs["max_tokens"], 2000)
         self.assertIs(batch_mock.await_args.kwargs["config"], config)
+
+    async def test_mcp_batch_wire_text_is_well_formed_xml(self) -> None:
+        batch = {"operation": "scrape_batch", "results": [{"status": "ok", "result": _result()}]}
+        with patch("tinysearch.core.scrape_urls", AsyncMock(return_value=batch)):
+            content, structured = await mcp._tool_manager.call_tool(
+                "scrape_urls", {"items": [{"url": "https://example.com/x", "query": "q"}]},
+                convert_result=True,
+            )
+
+        self.assertEqual(len(content), 1)
+        self.assertIsInstance(content[0], types.TextContent)
+        root = ElementTree.fromstring(content[0].text)
+        self.assertEqual(root.tag, "url_grounded_answers")
+        self.assertEqual(root.findtext("pages/page/title", default="").strip(), "Title")
+        self.assertEqual(structured, {"result": content[0].text})
 
     async def test_returns_xml_prompt_directly_with_diagnostics(self) -> None:
         scrape_mock = AsyncMock(return_value=_result())
