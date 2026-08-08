@@ -97,8 +97,11 @@ pricing. TinySearch reduces the web content sent to the model; it does not
 control what the client does with that evidence afterward.
 
 <p align="center">
-  <img src="assets/token-savings-benchmark.svg" alt="Benchmark: TinySearch uses 95% fewer tokens than a naive search-and-fetch agent across 8 research queries, cutting cost per 1,000 queries from $72.13 to $3.40 at Claude Sonnet 5 input pricing" width="900" />
+  <img src="assets/token-savings-benchmark.svg" alt="Benchmark: TinySearch uses 95% fewer tokens than a naive search-and-fetch agent across 8 research queries, cutting modeled input cost per 1,000 queries from $72.13 to $3.40 at $3 per million tokens" width="900" />
 </p>
+
+The cost panel uses an illustrative $3.00 per million input-token rate and
+excludes search, crawling, model output, and downstream agent use.
 
 The naive baseline isn't a strawman product, it's the same pages TinySearch
 crawled for each query, fed to the model unfiltered, the way a generic
@@ -134,9 +137,10 @@ client:
 The client launches TinySearch over stdio when it needs it. No repository
 clone, hosted account, or paid search key is required.
 
-Fast `search` starts without Chromium or an embedding model. Deep `research`
-and `scrape_url` initialize those dependencies on their first use; pre-warm
-both ahead of time if you will use the deep workflows:
+Fast `search` starts without Chromium or an embedding model. The first scrape
+initializes Chromium; focused scraping and the legacy `research` tool also
+initialize the configured embedding model. Pre-warm both ahead of time if you
+will use those workflows:
 
 ```bash
 uvx --from "tinysuite-search[server]" tinysearch setup
@@ -149,15 +153,15 @@ uvx --from "tinysuite-search[server]" tinysearch setup
 Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 [installation guide](https://tinysuite.dev/docs/tinysearch/).
 
-## Four focused tools
+## Five MCP tools
 
 | Tool | Use it when |
 | --- | --- |
-| `search(query, limit=10)` | You need fast, backend-ordered top-level discovery |
-| `research(query)` | The agent needs to discover and compare relevant sources |
+| `search(query)` | You need fast, backend-ordered discovery without crawling or reranking |
 | `scrape_url(url, query="*")` | You know a page; `*` returns its configured clean page-order token budget |
 | `scrape_urls(items)` | You need up to five independent URL/query scrapes in one batch |
-| `get_current_datetime()` | Research depends on the current date or time |
+| `get_current_datetime()` | A question depends on the current date or time |
+| `research(query)` | Legacy compatibility only; deprecated in favor of `search` followed by scraping |
 
 TinySearch deliberately stays focused. It is a retrieval layer, not another
 agent, chat interface, hosted search product, or permanent web index.
@@ -167,65 +171,49 @@ for parameters and response contracts.
 
 ## What your agent gets
 
-TinySearch does not spend another model call writing the final answer. Use
-`search` for a lightweight list of titles, URLs, previews, and upstream dates;
-use `research` when your agent needs ranked, source-grounded page evidence.
+TinySearch does not spend another model call writing the final answer. The
+recommended flow is `search` for lightweight discovery, then `scrape_url` or
+`scrape_urls` for the pages worth reading.
 
-An abridged structured result looks like this:
+Successful MCP tool-result text is XML. A search result looks like this:
 
-```json
-{
-  "schema_version": "1",
-  "operation": "research",
-  "status": "ok",
-  "query": "How does asyncio cancellation work?",
-  "sources": [
-    {
-      "title": "Coroutines and Tasks",
-      "url": "https://docs.python.org/3/library/asyncio-task.html",
-      "chunks": [
-        {
-          "text": "Tasks can be cancelled...",
-          "tokens": 146,
-          "rank": 1,
-          "scores": {
-            "rrf": 0.91,
-            "dense": 0.88,
-            "bm25": 0.79
-          }
-        }
-      ]
-    }
-  ],
-  "stats": {
-    "search_results": 10,
-    "sources_crawled": 4,
-    "chunks_considered": 86,
-    "chunks_selected": 8
-  }
-}
+```xml
+<search_results>
+  <query>Python asyncio cancellation</query>
+  <results>
+    <result index="1">
+      <title>Coroutines and Tasks</title>
+      <url>https://docs.python.org/3/library/asyncio-task.html</url>
+      <search_preview>Tasks can be cancelled...</search_preview>
+    </result>
+  </results>
+</search_results>
 ```
 
-Every successful MCP tool result has XML text content. MCP still uses its
-standard JSON-RPC transport envelope, including protocol-level errors.
-Research and scraping responses are compact, source-grounded research packets
-for the client model to use directly.
-TinySearch first extracts each webpage into readable Markdown, then selects the
-passages worth keeping and ties each one to its source. XML boundaries and
-escaping keep retrieved content clearly separate from the instructions around
-it; the Python API and FastAPI `output_format: "json"` mode return structured
-evidence for applications that need to inspect or transform it themselves.
+`scrape_url` returns `<url_grounded_answer>` with the page URL and selected
+Markdown chunks. `scrape_urls` returns the same evidence under one
+`<url_grounded_answers>` batch root, and `get_current_datetime` returns
+`<current_datetime>`. Dynamic values are escaped so retrieved content cannot
+forge the XML boundaries around it.
+
+MCP still uses its standard JSON-RPC transport envelope, including
+protocol-level errors and optional `structuredContent`. Python and FastAPI keep
+their structured JSON contracts for applications that need to store, inspect,
+or transform the evidence.
 
 ## How it works
 
-1. `search` returns backend-ordered discovery results directly, without crawling
-   or ranking them locally.
-2. `research` searches the web with DDGS or your own SearXNG instance.
-3. It hybrid-ranks search results, crawls selected pages, then ranks and returns
-   the best evidence passages.
+1. `search` returns backend-ordered titles, URLs, previews, and upstream dates
+   without starting Chromium or an embedding model.
+2. `scrape_url` reads a known page. Omit its query or use `"*"` to keep clean
+   Markdown in page order within the configured token budget.
+3. Supply a focused query when TinySearch should chunk and hybrid-rank the page
+   before returning evidence. `scrape_urls` applies the same behavior to up to
+   five independent URL/query pairs concurrently.
 
-Dense and lexical ranking happen before the evidence reaches your model. The
-model gets a small, relevant research packet rather than a pile of raw pages.
+The deprecated MCP `research` tool retains the older all-in-one search, crawl,
+and rerank pipeline for compatibility. New MCP integrations should compose
+`search` with one of the scrape tools instead.
 
 ## Python library
 
@@ -237,15 +225,15 @@ pip install tinysuite-search
 
 ```python
 import asyncio
-from tinysearch import search, research, to_prompt
+from tinysearch import scrape_url, search, to_prompt
 
 
 async def main():
     results = await search("Python async tasks")
     print(results["results"])
 
-    evidence = await research("How does asyncio cancellation work?")
-
+    page_url = results["results"][0]["url"]
+    evidence = await scrape_url(page_url, "How does asyncio cancellation work?")
     print(evidence["sources"])
     print(to_prompt(evidence))
 
@@ -253,16 +241,19 @@ async def main():
 asyncio.run(main())
 ```
 
-The Python API returns a stable, JSON-serializable evidence schema. Rendering
-that evidence into an LLM prompt is explicit, so applications can store,
-inspect, transform, or budget the result first.
+The Python API returns stable, JSON-serializable results. `search` accepts a
+per-call `limit` from 1 to 50. `scrape_url` and `scrape_urls` accept a per-call
+`max_tokens` budget (4,000 by default); omit a scrape query or use `"*"` for
+page-order mode. Rendering structured evidence into an LLM prompt is explicit,
+so applications can store, inspect, transform, or budget the result first.
 
-The optional FastAPI app mirrors these surfaces: `POST /search` accepts
-`query`, `limit` (1–50), and `output_format` (`prompt` or `json`). `POST
-/scrape` accepts an optional query: omit it or use `"*"` for the first clean
-4,000 tokens in page order; provide a query only for focused chunk selection.
-`POST /scrape/batch` accepts one to five `{ "url", "query" }` items and
-returns an independent outcome for each.
+The optional FastAPI app mirrors these surfaces. `POST /search`,
+`POST /research`, and `POST /scrape` accept `output_format` (`prompt` or
+`json`) and always respond with JSON; prompt mode places rendered text in the
+`answer` field. `POST /scrape/batch` accepts one to five
+`{ "url", "query" }` items and always returns structured per-item outcomes.
+The app also exposes `/health`, `/current_datetime`, and read-only `/config`;
+configuration writes require explicit environment opt-in.
 
 ## Search backends
 
@@ -349,7 +340,9 @@ across Linux, macOS, and Windows.
 
 ## Entrypoints
 
-- `tinysearch.search`, `tinysearch.research`, and `tinysearch.scrape_url`: structured Python API
+- `tinysearch.search`, `tinysearch.scrape_url`, and `tinysearch.scrape_urls`: structured Python API
+- `tinysearch.research`: legacy all-in-one structured Python research pipeline
+- `tinysearch.get_current_datetime`: structured UTC date and time
 - `tinysearch.to_prompt`: pure structured-evidence prompt renderer
 - `tinysearch mcp`: stdio MCP server (also the no-argument default)
 - `tinysearch serve`: Streamable HTTP MCP server
