@@ -361,15 +361,25 @@ class ScrapeUrlBudgetTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ScrapeUrlValidationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_empty_query_raises_value_error(self) -> None:
-        with self.assertRaises(ValueError):
-            await scrape_url(
+    async def test_blank_query_returns_raw_page_order(self) -> None:
+        async def should_not_embed(_inputs: list[str]) -> list[list[float]]:
+            self.fail("raw page-order scrape must not create embeddings")
+
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
                 "https://example.com/x",
                 "   ",
                 config=_config(),
-                tokenizer_name=TOKENIZER,
+                embedder=should_not_embed,
                 crawl_fn=_fake_html_page,
             )
+
+        self.assertEqual(result.query, "*")
+        self.assertIn("Section B", result.chunks[0]["text"])
+        self.assertNotIn("dense_score", result.chunks[0])
 
     async def test_invalid_url_propagates(self) -> None:
         with patch(

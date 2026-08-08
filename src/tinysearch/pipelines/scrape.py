@@ -51,7 +51,7 @@ async def run_scrape_pipeline(
 ) -> ScrapeResult:
     """Extract a URL in page order, or rank chunks only for a supplied query.
 
-    ``query=None`` and ``query='*'`` select raw page-order extraction; any
+    Omitted, blank, and ``'*'`` queries select raw page-order extraction; any
     other non-empty query enables the existing focused chunk-ranking path.
     """
     cleaned_query = (query or "").strip()
