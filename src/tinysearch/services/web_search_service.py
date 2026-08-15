@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 import socket
 import sys
 import urllib.error
@@ -13,13 +12,6 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
-
-
-@lru_cache(maxsize=1)
-def _async_web_crawler_cls() -> Any:
-    from crawl4ai import AsyncWebCrawler
-
-    return AsyncWebCrawler
 
 
 @lru_cache(maxsize=1)
@@ -122,28 +114,6 @@ def filter_blocked_search_results(
         for result in search_results
         if not is_blocked_domain(result.url, blocked_domains)
     ]
-
-
-def _extract_links_from_html(html: str) -> list[str]:
-    # Very small/fast extractor; good enough for basic crawling.
-    return list(dict.fromkeys(re.findall(r'href="([^"]+)"', html, flags=re.IGNORECASE)))
-
-
-async def crawl(url: str) -> dict:
-    """
-    Crawl a page with crawl4ai and return basic extracted content.
-
-    Returns a dict with: url, markdown, html, links.
-    """
-    _ensure_utf8_stdio()
-    AsyncWebCrawler = _async_web_crawler_cls()
-    async with AsyncWebCrawler() as crawler:
-        result = await crawler.arun(url=url)
-
-    html = getattr(result, "html", "") or ""
-    markdown = getattr(result, "markdown", "") or ""
-    links = _extract_links_from_html(html) if html else []
-    return {"url": url, "markdown": markdown, "html": html, "links": links}
 
 
 def _ddgs_search(

@@ -197,7 +197,7 @@ def is_document_url(url: str) -> bool:
     return url_path_suffix(url) in {"pdf", "docx", "doc"}
 
 
-def _download_url_bytes(url: str) -> bytes:
+def _download_url_bytes(url: str, *, timeout_seconds: float = 30.0) -> bytes:
     req = Request(
         url,
         headers={
@@ -205,7 +205,7 @@ def _download_url_bytes(url: str) -> bytes:
             "Accept": "*/*",
         },
     )
-    with urlopen(req, timeout=30) as resp:
+    with urlopen(req, timeout=timeout_seconds) as resp:
         return resp.read()
 
 
@@ -241,12 +241,12 @@ def _extract_docx_text(data: bytes) -> str:
         return "\n\n".join(parts).strip()
 
 
-def extract_document_text(url: str) -> tuple[str, str]:
+def extract_document_text(url: str, *, timeout_seconds: float = 30.0) -> tuple[str, str]:
     suffix = url_path_suffix(url)
     if suffix == "doc":
         raise ValueError("legacy .doc files are not supported; use PDF or DOCX")
 
-    data = _download_url_bytes(url)
+    data = _download_url_bytes(url, timeout_seconds=timeout_seconds)
     if suffix == "pdf":
         return _extract_pdf_text(data), "pdf"
     if suffix == "docx":

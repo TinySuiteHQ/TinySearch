@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from functools import partial
 from typing import Any
 
 from tinysearch.config import normalize_config
@@ -83,7 +84,15 @@ async def run_scrape_pipeline(
             raise UnsupportedDocumentError(
                 "legacy .doc files are not supported; use PDF or DOCX"
             )
-        document_fn = document_fn or extract_document_text
+        if document_fn is None:
+            # Bound the blocking download's own socket timeout by the pipeline
+            # budget: asyncio.timeout() below can only cancel the *awaiting*
+            # task, not the underlying to_thread() download, so an unbounded
+            # per-request timeout would keep that thread (and its socket) alive
+            # well past the point callers were told the fetch had timed out.
+            document_fn = partial(
+                extract_document_text, timeout_seconds=min(fetch_timeout_seconds, 30.0)
+            )
         markdown, _document_type = await extract_document_with_timeout(
             url=safe_url,
             timeout_seconds=fetch_timeout_seconds,
