@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import unittest
 from types import SimpleNamespace
@@ -92,6 +93,9 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
             new=AsyncMock(return_value=scrape_result),
         ), patch("tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()), patch(
             "tinysearch.core._ensure_browser_bundle", new=AsyncMock()
+        ), patch(
+            "tinysearch.core.create_browser_crawler",
+            return_value=contextlib.nullcontext(None),
         ):
             result = await tinysearch.scrape_urls([{"url": "https://example.com/x", "query": "q"}])
 
@@ -112,7 +116,10 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
             side_effect=[successful, ValueError("bad URL")],
         ), patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()), patch(
             "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
-        ) as embeddings:
+        ) as embeddings, patch(
+            "tinysearch.core.create_browser_crawler",
+            return_value=contextlib.nullcontext(None),
+        ):
             result = await scrape_urls(
                 [{"url": "https://one.example"}, {"url": "https://two.example", "query": "*"}]
             )

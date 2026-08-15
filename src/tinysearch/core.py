@@ -10,6 +10,7 @@ pipeline) lives here exactly once.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import Any
@@ -21,6 +22,7 @@ from tinysearch.results import public_chunk, result_envelope
 from tinysearch.services.current_datetime_service import current_datetime_payload
 from tinysearch.services.embedding_service import normalize_embedding_backend
 from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
+from tinysearch.services.site_crawl_service import create_browser_crawler, is_document_url
 from tinysearch.services.tinysearch_config_service import normalize_query
 from tinysearch.services.web_search_service import (
     filter_blocked_search_results,
@@ -123,6 +125,7 @@ async def _scrape_url_with_config(
     *,
     max_tokens: int,
     config: dict[str, Any],
+    crawler: Any | None,
 ) -> dict[str, Any]:
     scrape_result = await run_scrape_pipeline(
         url,
@@ -130,6 +133,7 @@ async def _scrape_url_with_config(
         max_tokens=max_tokens,
         include_metadata=True,
         config=config,
+        crawler=crawler,
     )
     source = {
         "id": "1",
@@ -184,18 +188,23 @@ async def scrape_urls(
     if any((query or "").strip() not in {"", "*"} for _, query in normalized):
         await _ensure_local_bundle_for_config(resolved)
     await _ensure_browser_bundle()
-    settled = await asyncio.gather(
-        *(
-            _scrape_url_with_config(
-                url,
-                query,
-                max_tokens=max_tokens,
-                config=resolved,
-            )
-            for url, query in normalized
-        ),
-        return_exceptions=True,
-    )
+
+    needs_browser = any(not is_document_url(url) for url, _ in normalized)
+    crawler_ctx = create_browser_crawler() if needs_browser else contextlib.nullcontext(None)
+    async with crawler_ctx as shared_crawler:
+        settled = await asyncio.gather(
+            *(
+                _scrape_url_with_config(
+                    url,
+                    query,
+                    max_tokens=max_tokens,
+                    config=resolved,
+                    crawler=shared_crawler,
+                )
+                for url, query in normalized
+            ),
+            return_exceptions=True,
+        )
     results: list[dict[str, Any]] = []
     for (url, query), outcome in zip(normalized, settled, strict=True):
         if isinstance(outcome, Exception):

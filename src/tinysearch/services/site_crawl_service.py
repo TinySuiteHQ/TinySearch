@@ -373,12 +373,16 @@ async def fetch_html_for_query(
     *,
     bm25_threshold: float = 1.5,
     bm25_language: str = "english",
+    crawler: Any | None = None,
 ) -> dict[str, Any]:
     """Fetch a URL, applying a BM25 content filter only for a supplied query.
 
     Returns ``final_url``, ``html``, ``markdown_raw``, ``markdown_fit`` and the
     crawler's ``metadata`` dict. The ``final_url`` reflects the URL after any
     redirects Crawl4AI followed.
+
+    Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
+    to reuse one browser across many calls instead of launching a fresh one here.
     """
     _ensure_utf8_stdio()
 
@@ -402,8 +406,11 @@ async def fetch_html_for_query(
         )
     config = CrawlerRunConfig(**config_kwargs)
 
-    async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as crawler:
+    if crawler is not None:
         result = await crawler.arun(url=url, config=config)
+    else:
+        async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
+            result = await owned_crawler.arun(url=url, config=config)
 
     final_url = (
         getattr(result, "redirected_url", None)

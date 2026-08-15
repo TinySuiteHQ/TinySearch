@@ -48,11 +48,16 @@ async def run_scrape_pipeline(
     embedder: EmbeddingFn | None = None,
     crawl_fn: HtmlCrawlFn | None = None,
     document_fn: DocumentExtractFn | None = None,
+    crawler: Any | None = None,
 ) -> ScrapeResult:
     """Extract a URL in page order, or rank chunks only for a supplied query.
 
     Omitted, blank, and ``'*'`` queries select raw page-order extraction; any
     other non-empty query enables the existing focused chunk-ranking path.
+
+    Pass `crawler` (an already-started AsyncWebCrawler, see
+    site_crawl_service.create_browser_crawler()) to reuse one browser across
+    several pipeline calls instead of launching a fresh one per call.
     """
     cleaned_query = (query or "").strip()
     raw_page_order = cleaned_query in {"", "*"}
@@ -93,6 +98,7 @@ async def run_scrape_pipeline(
             bm25_language=resolved["crawl_bm25_language"],
             timeout_seconds=fetch_timeout_seconds,
             crawl_fn=crawl_fn,
+            crawler=crawler,
         )
         final_url = str(page.get("final_url") or safe_url)
         html = str(page.get("html") or "")
