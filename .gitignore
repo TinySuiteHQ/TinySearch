@@ -24,3 +24,4 @@ models/*
 *.egg-info/
 dist/
 build/
+uv.lock
