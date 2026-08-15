@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
+from functools import partial
 from typing import Any
 
 from tinysearch.config import normalize_config
@@ -48,11 +49,16 @@ async def run_scrape_pipeline(
     embedder: EmbeddingFn | None = None,
     crawl_fn: HtmlCrawlFn | None = None,
     document_fn: DocumentExtractFn | None = None,
+    crawler: Any | None = None,
 ) -> ScrapeResult:
     """Extract a URL in page order, or rank chunks only for a supplied query.
 
     Omitted, blank, and ``'*'`` queries select raw page-order extraction; any
     other non-empty query enables the existing focused chunk-ranking path.
+
+    Pass `crawler` (an already-started AsyncWebCrawler, see
+    site_crawl_service.create_browser_crawler()) to reuse one browser across
+    several pipeline calls instead of launching a fresh one per call.
     """
     cleaned_query = (query or "").strip()
     raw_page_order = cleaned_query in {"", "*"}
@@ -78,7 +84,15 @@ async def run_scrape_pipeline(
             raise UnsupportedDocumentError(
                 "legacy .doc files are not supported; use PDF or DOCX"
             )
-        document_fn = document_fn or extract_document_text
+        if document_fn is None:
+            # Bound the blocking download's own socket timeout by the pipeline
+            # budget: asyncio.timeout() below can only cancel the *awaiting*
+            # task, not the underlying to_thread() download, so an unbounded
+            # per-request timeout would keep that thread (and its socket) alive
+            # well past the point callers were told the fetch had timed out.
+            document_fn = partial(
+                extract_document_text, timeout_seconds=min(fetch_timeout_seconds, 30.0)
+            )
         markdown, _document_type = await extract_document_with_timeout(
             url=safe_url,
             timeout_seconds=fetch_timeout_seconds,
@@ -93,6 +107,7 @@ async def run_scrape_pipeline(
             bm25_language=resolved["crawl_bm25_language"],
             timeout_seconds=fetch_timeout_seconds,
             crawl_fn=crawl_fn,
+            crawler=crawler,
         )
         final_url = str(page.get("final_url") or safe_url)
         html = str(page.get("html") or "")

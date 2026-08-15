@@ -204,15 +204,19 @@ async def fetch_html_with_timeout(
     bm25_language: str,
     timeout_seconds: float,
     crawl_fn: HtmlCrawlFn,
+    crawler: Any | None = None,
 ) -> dict[str, Any]:
     try:
         async with asyncio.timeout(timeout_seconds):
-            return await crawl_fn(
-                url=url,
-                user_query=query,
-                bm25_threshold=bm25_threshold,
-                bm25_language=bm25_language,
-            )
+            kwargs: dict[str, Any] = {
+                "url": url,
+                "user_query": query,
+                "bm25_threshold": bm25_threshold,
+                "bm25_language": bm25_language,
+            }
+            if crawler is not None:
+                kwargs["crawler"] = crawler
+            return await crawl_fn(**kwargs)
     except (asyncio.TimeoutError, TimeoutError) as exc:
         raise FetchTimeoutError(f"fetch timed out after {timeout_seconds}s") from exc
     except (InvalidUrlError, BlockedUrlError):

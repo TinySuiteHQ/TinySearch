@@ -197,7 +197,7 @@ def is_document_url(url: str) -> bool:
     return url_path_suffix(url) in {"pdf", "docx", "doc"}
 
 
-def _download_url_bytes(url: str) -> bytes:
+def _download_url_bytes(url: str, *, timeout_seconds: float = 30.0) -> bytes:
     req = Request(
         url,
         headers={
@@ -205,7 +205,7 @@ def _download_url_bytes(url: str) -> bytes:
             "Accept": "*/*",
         },
     )
-    with urlopen(req, timeout=30) as resp:
+    with urlopen(req, timeout=timeout_seconds) as resp:
         return resp.read()
 
 
@@ -241,12 +241,12 @@ def _extract_docx_text(data: bytes) -> str:
         return "\n\n".join(parts).strip()
 
 
-def extract_document_text(url: str) -> tuple[str, str]:
+def extract_document_text(url: str, *, timeout_seconds: float = 30.0) -> tuple[str, str]:
     suffix = url_path_suffix(url)
     if suffix == "doc":
         raise ValueError("legacy .doc files are not supported; use PDF or DOCX")
 
-    data = _download_url_bytes(url)
+    data = _download_url_bytes(url, timeout_seconds=timeout_seconds)
     if suffix == "pdf":
         return _extract_pdf_text(data), "pdf"
     if suffix == "docx":
@@ -373,12 +373,16 @@ async def fetch_html_for_query(
     *,
     bm25_threshold: float = 1.5,
     bm25_language: str = "english",
+    crawler: Any | None = None,
 ) -> dict[str, Any]:
     """Fetch a URL, applying a BM25 content filter only for a supplied query.
 
     Returns ``final_url``, ``html``, ``markdown_raw``, ``markdown_fit`` and the
     crawler's ``metadata`` dict. The ``final_url`` reflects the URL after any
     redirects Crawl4AI followed.
+
+    Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
+    to reuse one browser across many calls instead of launching a fresh one here.
     """
     _ensure_utf8_stdio()
 
@@ -402,8 +406,11 @@ async def fetch_html_for_query(
         )
     config = CrawlerRunConfig(**config_kwargs)
 
-    async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as crawler:
+    if crawler is not None:
         result = await crawler.arun(url=url, config=config)
+    else:
+        async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
+            result = await owned_crawler.arun(url=url, config=config)
 
     final_url = (
         getattr(result, "redirected_url", None)
