@@ -1,4 +1,4 @@
-"""Install Chromium and download the configured ONNX embedding model.
+"""Install required local browser and embedding bundles.
 
 All output goes to stderr, matching `doctor`, this can run adjacent to an
 MCP stdio server, so stdout must stay clean.
@@ -18,9 +18,12 @@ def _log(message: str) -> None:
 
 
 def run(with_system_deps: bool = False) -> int:
-    install_chromium(with_system_deps)
-
     config = load_tinysearch_config()
+    if str(config.get("browser_cdp_url") or "").strip():
+        _log("browser_cdp_url is configured; skipping bundled Chromium install")
+    else:
+        install_chromium(with_system_deps)
+
     if normalize_embedding_backend(str(config["embedding_backend"])) == "onnx":
         from tinysearch.services.onnx_bundle_service import ensure_onnx_bundle_sync
 

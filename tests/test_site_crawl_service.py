@@ -5,7 +5,35 @@ import unittest
 from tinysearch.services.site_crawl_service import (
     _BOILERPLATE_EXCLUDED_TAGS,
     _crawler_config_for_fit_markdown,
+    _lightweight_browser_config,
 )
+
+
+class _RecordingBrowserConfig:
+    def __init__(self, **kwargs) -> None:
+        self.kwargs = kwargs
+
+
+class BrowserBackendConfigTests(unittest.TestCase):
+    def test_default_uses_bundled_lightweight_browser(self) -> None:
+        config = _lightweight_browser_config(_RecordingBrowserConfig)
+
+        self.assertTrue(config.kwargs["light_mode"])
+        self.assertTrue(config.kwargs["memory_saving_mode"])
+        self.assertNotIn("cdp_url", config.kwargs)
+
+    def test_external_cdp_preserves_backend_identity(self) -> None:
+        config = _lightweight_browser_config(
+            _RecordingBrowserConfig,
+            {"browser_cdp_url": "http://browser:9222"},
+        )
+
+        self.assertEqual(config.kwargs["browser_mode"], "custom")
+        self.assertEqual(config.kwargs["cdp_url"], "http://browser:9222")
+        self.assertTrue(config.kwargs["cdp_cleanup_on_close"])
+        self.assertEqual(config.kwargs["cdp_close_delay"], 0)
+        self.assertIsNone(config.user_agent)
+        self.assertEqual(config.browser_hint, "")
 
 
 class CrawlerConfigBoilerplateExclusionTests(unittest.TestCase):

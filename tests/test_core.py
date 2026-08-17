@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, patch
 
 import tinysearch
 from tinysearch.config import DEFAULT_CONFIG, TinySearchConfig
-from tinysearch.core import _ensure_local_bundle_for_config, scrape_urls
+from tinysearch.core import (
+    _ensure_browser_bundle,
+    _ensure_local_bundle_for_config,
+    scrape_urls,
+)
 from tinysearch.pipelines.research import ResearchResult
 from tinysearch.results import result_envelope
 
@@ -146,6 +150,22 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
                 {"embedding_backend": "onnx", "embedding_model": "fast"}
             )
         ensure.assert_called_once_with("fast")
+
+    async def test_external_cdp_skips_bundled_chromium_install(self) -> None:
+        with patch(
+            "tinysearch.services.browser_bundle_service.ensure_chromium_sync"
+        ) as ensure:
+            await _ensure_browser_bundle({"browser_cdp_url": "http://browser:9222"})
+
+        ensure.assert_not_called()
+
+    async def test_default_browser_ensures_bundled_chromium(self) -> None:
+        with patch(
+            "tinysearch.services.browser_bundle_service.ensure_chromium_sync"
+        ) as ensure:
+            await _ensure_browser_bundle({"browser_cdp_url": ""})
+
+        ensure.assert_called_once_with()
 
 
 if __name__ == "__main__":

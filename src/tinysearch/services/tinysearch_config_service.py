@@ -49,6 +49,9 @@ def load_tinysearch_config(path: str | Path | None = None) -> dict[str, Any]:
     embedding_model = os.environ.get("TINYSEARCH_EMBEDDING_MODEL", "").strip()
     if embedding_model:
         overrides["embedding_model"] = embedding_model
+    browser_cdp_url = os.environ.get("TINYSEARCH_BROWSER_CDP_URL", "").strip()
+    if browser_cdp_url:
+        overrides["browser_cdp_url"] = browser_cdp_url
     return (
         config.with_overrides(overrides).to_dict()
         if overrides

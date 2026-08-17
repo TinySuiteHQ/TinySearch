@@ -40,6 +40,19 @@ class SetupRunTests(unittest.TestCase):
 
         install.assert_called_once_with(True)
 
+    def test_external_cdp_skips_chromium_install(self) -> None:
+        config = {
+            "browser_cdp_url": "http://browser:9222",
+            "embedding_backend": "openai_compatible",
+            "embedding_model": "fast",
+        }
+        with patch.object(setup_module, "install_chromium") as install, patch.object(
+            setup_module, "load_tinysearch_config", return_value=config
+        ):
+            setup_module.run()
+
+        install.assert_not_called()
+
 
 class InstallChromiumTests(unittest.TestCase):
     def test_non_linux_ignores_with_system_deps(self) -> None:

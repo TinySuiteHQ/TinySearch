@@ -14,6 +14,7 @@ services:
     environment:
       TINYSEARCH_MODELS_DIR: /data/models
       TINYSEARCH_CONFIG_PATH: /config/tinysearch_config.json
+      TINYSEARCH_BROWSER_CDP_URL: ${TINYSEARCH_BROWSER_CDP_URL:-}
       MCP_TRANSPORT: streamable-http
       MCP_HOST: 0.0.0.0
       MCP_PORT: 8000
@@ -47,6 +48,7 @@ services:
     environment:
       TINYSEARCH_MODELS_DIR: /data/models
       TINYSEARCH_CONFIG_PATH: /config/tinysearch_config.json
+      TINYSEARCH_BROWSER_CDP_URL: ${TINYSEARCH_BROWSER_CDP_URL:-}
       SEARXNG_URL: http://searxng:8080/search
     depends_on:
       - searxng

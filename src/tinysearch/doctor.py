@@ -10,6 +10,7 @@ import os
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from tinysearch.services.embedding_service import (
     normalize_embedding_backend,
@@ -38,6 +39,39 @@ def _check_chromium() -> tuple[bool, str]:
     if executable.exists():
         return True, str(executable)
     return False, f"Chromium executable not found at {executable} (run `tinysearch setup`)"
+
+
+def _display_cdp_endpoint(cdp_url: str) -> str:
+    parsed = urlsplit(cdp_url)
+    host = parsed.hostname or "unknown-host"
+    try:
+        port = f":{parsed.port}" if parsed.port is not None else ""
+    except ValueError:
+        port = ""
+    return f"{parsed.scheme}://{host}{port}"
+
+
+def _check_cdp_browser(cdp_url: str) -> tuple[bool, str]:
+    endpoint = _display_cdp_endpoint(cdp_url)
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return False, "playwright is not installed"
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.connect_over_cdp(cdp_url, timeout=5_000)
+            try:
+                connected = browser.is_connected()
+            finally:
+                browser.close()
+    except Exception as exc:
+        return False, (
+            f"could not connect to external CDP browser at {endpoint} "
+            f"({type(exc).__name__})"
+        )
+    if connected:
+        return True, f"connected to external CDP browser at {endpoint}"
+    return False, f"external CDP browser disconnected at {endpoint}"
 
 
 def _check_model(config: dict[str, Any]) -> tuple[bool, str]:
@@ -70,8 +104,14 @@ def run() -> int:
         f"({'found' if config_path.exists() else 'not found, using built-in defaults'})"
     )
 
+    browser_cdp_url = str(config.get("browser_cdp_url") or "").strip()
+    browser_check = (
+        ("external browser", *_check_cdp_browser(browser_cdp_url))
+        if browser_cdp_url
+        else ("chromium", *_check_chromium())
+    )
     checks = [
-        ("chromium", *_check_chromium()),
+        browser_check,
         ("model", *_check_model(config)),
         ("config dir writable", *_check_writable(config_path.parent)),
     ]

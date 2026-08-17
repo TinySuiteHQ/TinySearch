@@ -13,6 +13,9 @@ from tinysearch.services.tinysearch_config_service import (
 )
 
 
+_OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({"browser_cdp_url"})
+
+
 def _tinysearch_version() -> str:
     return os.environ.get("TINYSEARCH_VERSION", "dev").strip() or "dev"
 
@@ -65,7 +68,12 @@ async def current_datetime_endpoint() -> dict[str, str]:
 async def get_config_endpoint() -> dict[str, Any]:
     config = load_tinysearch_config()
     return {
-        key: ("***" if any(marker in key.lower() for marker in ("secret", "token", "api_key")) else value)
+        key: (
+            "***"
+            if (key == "browser_cdp_url" and value)
+            or any(marker in key.lower() for marker in ("secret", "token", "api_key"))
+            else value
+        )
         for key, value in config.items()
     }
 
@@ -93,6 +101,23 @@ async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
                     "Set TINYSEARCH_CONFIG_PATH to an explicit writable override "
                     "file before enabling config updates."
                 ),
+            },
+        )
+    operator_managed_fields = sorted(
+        _OPERATOR_MANAGED_CONFIG_FIELDS.intersection(payload)
+    )
+    if operator_managed_fields:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "code": "operator_managed_config",
+                "message": (
+                    "browser_cdp_url cannot be changed over HTTP. Configure it "
+                    "at startup with TINYSEARCH_BROWSER_CDP_URL or in the file "
+                    "selected by TINYSEARCH_CONFIG_PATH, then restart TinySearch. "
+                    "Omit browser_cdp_url when updating other settings."
+                ),
+                "fields": operator_managed_fields,
             },
         )
     try:

@@ -53,7 +53,9 @@ async def _ensure_local_bundle_for_config(config: dict[str, Any]) -> None:
     await asyncio.to_thread(ensure_onnx_bundle_sync, str(config["embedding_model"]))
 
 
-async def _ensure_browser_bundle() -> None:
+async def _ensure_browser_bundle(config: Mapping[str, Any]) -> None:
+    if str(config.get("browser_cdp_url") or "").strip():
+        return
     from tinysearch.services.browser_bundle_service import ensure_chromium_sync
 
     await asyncio.to_thread(ensure_chromium_sync)
@@ -110,7 +112,7 @@ async def research(query: str, *, config: ConfigInput | None = None) -> dict[str
     query = normalize_query(query)
     resolved_config = _resolve_config(config)
     await _ensure_local_bundle_for_config(resolved_config)
-    await _ensure_browser_bundle()
+    await _ensure_browser_bundle(resolved_config)
     result = await run_research_pipeline(
         query,
         config=resolved_config,
@@ -187,10 +189,14 @@ async def scrape_urls(
     resolved = _resolve_config(config)
     if any((query or "").strip() not in {"", "*"} for _, query in normalized):
         await _ensure_local_bundle_for_config(resolved)
-    await _ensure_browser_bundle()
+    await _ensure_browser_bundle(resolved)
 
     needs_browser = any(not is_document_url(url) for url, _ in normalized)
-    crawler_ctx = create_browser_crawler() if needs_browser else contextlib.nullcontext(None)
+    crawler_ctx = (
+        create_browser_crawler(resolved)
+        if needs_browser
+        else contextlib.nullcontext(None)
+    )
     async with crawler_ctx as shared_crawler:
         settled = await asyncio.gather(
             *(
