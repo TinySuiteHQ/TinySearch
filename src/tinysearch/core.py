@@ -18,7 +18,7 @@ from typing import Any
 from tinysearch.config import ConfigInput, resolve_config
 from tinysearch.pipelines.research import run_research_pipeline
 from tinysearch.pipelines.scrape import run_scrape_pipeline
-from tinysearch.results import public_chunk, result_envelope
+from tinysearch.results import public_chunk, public_link, result_envelope
 from tinysearch.services.current_datetime_service import current_datetime_payload
 from tinysearch.services.embedding_service import normalize_embedding_backend
 from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
@@ -145,6 +145,10 @@ async def _scrape_url_with_config(
         "chunks": [
             public_chunk(chunk, rank=rank)
             for rank, chunk in enumerate(scrape_result.chunks, start=1)
+        ],
+        "links": [
+            public_link(link, rank=rank)
+            for rank, link in enumerate(scrape_result.links, start=1)
         ],
     }
     return result_envelope(

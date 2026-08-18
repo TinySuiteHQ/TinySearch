@@ -50,6 +50,27 @@ def format_relevant_text(chunks: Sequence[dict[str, Any]]) -> str:
     return "\n".join(blocks)
 
 
+def format_related_links(links: Sequence[dict[str, Any]]) -> str:
+    """Render bounded, ranked next-hop link candidates found on a scraped page."""
+    blocks: list[str] = []
+    for link in links:
+        url = str(link.get("url") or "").strip()
+        if not url:
+            continue
+        text = str(link.get("text") or "").strip()
+        blocks.extend(
+            [
+                f'<link rank="{int(link.get("rank") or len(blocks) + 1)}">',
+                "<url>", _xml_value(url), "</url>",
+                "<text>", _xml_value(text), "</text>",
+                "</link>",
+            ]
+        )
+    if not blocks:
+        return "<related_links />"
+    return "\n".join(["<related_links>", *blocks, "</related_links>"])
+
+
 def _today_text(today: str | None) -> str:
     return today or datetime.now(UTC).date().isoformat()
 
@@ -245,6 +266,7 @@ def format_url_grounded_answers(*, results: Sequence[dict[str, Any]], today: str
         sources = result.get("sources") if isinstance(result.get("sources"), list) else []
         source = sources[0] if sources and isinstance(sources[0], dict) else {}
         chunks = source.get("chunks") if isinstance(source.get("chunks"), list) else []
+        links = source.get("links") if isinstance(source.get("links"), list) else []
         lines.extend([
             f'<page index="{ordinal}" status="ok">', "<question>",
             _xml_value(str(result.get("query") or "").strip()), "</question>", "<title>",
@@ -256,6 +278,7 @@ def format_url_grounded_answers(*, results: Sequence[dict[str, Any]], today: str
             lines.extend(["<relevant_text>", relevant_text, "</relevant_text>"])
         else:
             lines.append("<relevant_text />")
+        lines.append(format_related_links(links))
         lines.append("</page>")
     lines.extend(["</pages>", "</url_grounded_answers>"])
     return "\n".join(lines)

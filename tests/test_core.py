@@ -91,6 +91,7 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
             truncated=False,
             retrieved_at="2026-01-01T00:00:00Z",
             metadata={"author": "A"},
+            links=[],
         )
         with patch(
             "tinysearch.core.run_scrape_pipeline",

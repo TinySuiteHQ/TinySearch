@@ -30,6 +30,17 @@ def public_chunk(chunk: dict[str, Any], *, rank: int) -> dict[str, Any]:
     }
 
 
+def public_link(link: dict[str, Any], *, rank: int) -> dict[str, Any]:
+    return {
+        "rank": rank,
+        "url": str(link.get("url") or "").strip(),
+        "text": str(link.get("text") or "").strip(),
+        "score": (
+            float(link["score"]) if link.get("score") is not None else None
+        ),
+    }
+
+
 def result_envelope(
     *,
     operation: str,
