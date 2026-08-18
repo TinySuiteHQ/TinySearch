@@ -420,7 +420,9 @@ async def run_research_pipeline(
                     }
 
             crawler_ctx = (
-                create_browser_crawler() if using_default_crawl_fn else contextlib.nullcontext(None)
+                create_browser_crawler(resolved)
+                if using_default_crawl_fn
+                else contextlib.nullcontext(None)
             )
             async with crawler_ctx as shared_crawler:
                 crawled_results = await asyncio.gather(

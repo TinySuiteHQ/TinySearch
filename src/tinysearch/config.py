@@ -7,6 +7,7 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from tinysearch.services.embedding_service import (
     DEFAULT_EMBEDDING_BACKEND,
@@ -66,6 +67,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "search_backend_fallback": True,
     "ddgs_timeout_seconds": 20.0,
     "ddgs_backend": "auto",
+    "browser_cdp_url": "",
     "trace_path": "",
 }
 
@@ -128,10 +130,24 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "crawl_fit_markdown_mode",
         "crawl_bm25_language",
         "ddgs_backend",
+        "browser_cdp_url",
         "trace_path",
     ):
         if config.get(key) is not None:
             config[key] = str(config[key])
+
+    browser_cdp_url = config["browser_cdp_url"].strip()
+    if browser_cdp_url:
+        parsed_cdp_url = urlsplit(browser_cdp_url)
+        if parsed_cdp_url.scheme.lower() not in {"http", "https", "ws", "wss"}:
+            raise ValueError(
+                "tinysearch config browser_cdp_url must use http, https, ws, or wss"
+            )
+        if not parsed_cdp_url.hostname:
+            raise ValueError(
+                "tinysearch config browser_cdp_url must include a hostname"
+            )
+    config["browser_cdp_url"] = browser_cdp_url
 
     embedding_backend = normalize_embedding_backend(
         str(config.get("embedding_backend") or DEFAULT_EMBEDDING_BACKEND)

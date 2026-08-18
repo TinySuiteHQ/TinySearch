@@ -2,6 +2,7 @@ import asyncio
 import re
 import sys
 import tempfile
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
@@ -157,18 +158,38 @@ def _crawler_config_for_fit_markdown(
     )
 
 
-def _lightweight_browser_config(BrowserConfig: Any) -> Any:
-    """BrowserConfig tuned to cut Chromium's memory/process footprint.
+def _lightweight_browser_config(
+    BrowserConfig: Any,
+    config: Mapping[str, Any] | None = None,
+) -> Any:
+    """Build BrowserConfig for bundled Chromium or an external CDP browser.
 
-    Deliberately does NOT touch `java_script_enabled` or disable JS in any way,
-    since that would break markdown extraction quality on JS-rendered pages.
-    Only non-content-affecting knobs:
+    Bundled Chromium keeps JavaScript enabled and uses only
+    non-content-affecting footprint controls:
     - light_mode: drops crashpad/extensions/sync/translate companion processes
     - memory_saving_mode: caps each renderer's V8 heap (~512MB) and discards
       caches aggressively
     - avoid_ads: blocks known ad/tracker network origins
     - extra_args: blocks images/fonts at the browser level; we only need text.
     """
+    cdp_url = str((config or {}).get("browser_cdp_url") or "").strip()
+    if cdp_url:
+        browser_config = BrowserConfig(
+            verbose=False,
+            browser_mode="custom",
+            cdp_url=cdp_url,
+            cdp_cleanup_on_close=True,
+            cdp_close_delay=0,
+            avoid_ads=True,
+        )
+        # Crawl4AI 0.9.2 parses ``user_agent`` during construction and crashes
+        # when it is passed as None, even though BrowserConfig documents None as
+        # supported. Clear both derived fields after construction so setup_context
+        # leaves the external browser's coherent identity untouched.
+        browser_config.user_agent = None
+        browser_config.browser_hint = ""
+        return browser_config
+
     return BrowserConfig(
         verbose=False,
         light_mode=True,
@@ -178,7 +199,7 @@ def _lightweight_browser_config(BrowserConfig: Any) -> Any:
     )
 
 
-def create_browser_crawler() -> Any:
+def create_browser_crawler(config: Mapping[str, Any] | None = None) -> Any:
     """Construct an AsyncWebCrawler meant to be reused across many crawl() calls.
 
     Launching a fresh Chromium browser per crawled URL is the dominant memory
@@ -186,7 +207,7 @@ def create_browser_crawler() -> Any:
     batch cuts peak memory substantially while preserving full JS rendering.
     """
     AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
-    return AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig))
+    return AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig, config))
 
 
 def url_path_suffix(url: str) -> str:

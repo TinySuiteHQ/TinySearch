@@ -60,6 +60,8 @@
   "crawl_overlap_tokens": 40,
   "_comment_crawl_max_page_tokens": "Maximum tokens retained from one crawled page before chunking. Zero disables the per-page limit.",
   "crawl_max_page_tokens": 0,
+  "_comment_browser_cdp_url": "Optional external Chrome DevTools Protocol endpoint. Leave empty to use TinySearch's bundled Chromium. Keep remote CDP endpoints private and authenticated.",
+  "browser_cdp_url": "",
 
   "_comment_embedding_backend": "Embedding implementation. Use 'onnx' for private local CPU embeddings or 'openai_compatible' for an OpenAI-compatible embedding API.",
   "embedding_backend": "onnx",

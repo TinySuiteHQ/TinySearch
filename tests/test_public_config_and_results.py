@@ -18,6 +18,7 @@ class PublicConfigTests(unittest.TestCase):
         config = TinySearchConfig()
         self.assertEqual(config["search_backend"], "ddgs")
         self.assertEqual(config.search_backend, "ddgs")
+        self.assertEqual(config.browser_cdp_url, "")
         json.dumps(config.to_dict())
 
     def test_explicit_file_then_call_overrides(self) -> None:
@@ -91,6 +92,31 @@ class PublicConfigTests(unittest.TestCase):
             config = load_tinysearch_config()
         self.assertEqual(config["embedding_backend"], "onnx")
         self.assertEqual(config["embedding_model"], "quality")
+
+    def test_browser_cdp_url_is_normalized_and_validated(self) -> None:
+        config = TinySearchConfig(browser_cdp_url="  http://browser:9222  ")
+        self.assertEqual(config.browser_cdp_url, "http://browser:9222")
+
+        for invalid_url in ("browser:9222", "ftp://browser:9222", "ws:///devtools"):
+            with self.subTest(invalid_url=invalid_url), self.assertRaisesRegex(
+                ValueError, "browser_cdp_url"
+            ):
+                TinySearchConfig(browser_cdp_url=invalid_url)
+
+    def test_server_loader_applies_browser_cdp_environment_override(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "TINYSEARCH_CONFIG_PATH": "/does/not/exist.json",
+                "TINYSEARCH_BROWSER_CDP_URL": "ws://browser:9222/devtools/browser/id",
+            },
+            clear=True,
+        ):
+            config = load_tinysearch_config()
+        self.assertEqual(
+            config["browser_cdp_url"],
+            "ws://browser:9222/devtools/browser/id",
+        )
 
 
 class PublicResultTests(unittest.TestCase):

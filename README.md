@@ -276,6 +276,36 @@ Brave is only consulted when the primary call errors or returns no results.
 Full key reference, SearXNG JSON-output setup, and Compose details live in the
 [configuration reference](https://tinysuite.dev/docs/tinysearch/configuration/).
 
+## External browser over CDP
+
+TinySearch uses its bundled Playwright Chromium by default. To use a browser
+that you operate separately, set its Chrome DevTools Protocol endpoint in the
+config file:
+
+```json
+{
+  "browser_cdp_url": "http://browser:9222"
+}
+```
+
+Server processes also accept `TINYSEARCH_BROWSER_CDP_URL`. When either setting
+is present, TinySearch connects through Crawl4AI instead of installing or
+launching the bundled Chromium. The external browser owns its executable,
+profile, proxy, and fingerprint configuration; TinySearch does not select or
+install a particular browser backend.
+
+Treat a CDP endpoint as privileged remote control of the browser. Keep it on a
+private network or loopback interface, require authentication when it crosses
+a host boundary, and do not expose port 9222 directly to the public internet.
+When TinySearch itself runs in Docker, `localhost` refers to the TinySearch
+container, so use an endpoint reachable from that container.
+
+The CDP endpoint is operator-managed and cannot be changed through the HTTP
+`PUT /config` endpoint, even when configuration writes are enabled. Set it in
+the startup environment or the file selected by `TINYSEARCH_CONFIG_PATH`, then
+restart TinySearch. HTTP clients can continue updating other settings by
+omitting `browser_cdp_url` from their partial update.
+
 ## Why TinySearch
 
 - **Built around token efficiency.** Page selection and passage selection
