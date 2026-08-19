@@ -7,9 +7,18 @@ from typing import Any
 
 SCHEMA_VERSION = "1"
 
+# Scores are a relative ranking signal, not a precision-sensitive measurement;
+# full float64 precision (e.g. 0.6379576852606178) only inflates the token
+# count of every result payload for digits no caller acts on.
+_SCORE_DECIMALS = 4
+
 
 def utc_timestamp() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _round_score(value: float) -> float:
+    return round(float(value), _SCORE_DECIMALS)
 
 
 def public_chunk(chunk: dict[str, Any], *, rank: int) -> dict[str, Any]:
@@ -19,13 +28,13 @@ def public_chunk(chunk: dict[str, Any], *, rank: int) -> dict[str, Any]:
         "tokens": int(chunk.get("tokens") or 0),
         "rank": rank,
         "scores": {
-            "rrf": float(
+            "rrf": _round_score(
                 chunk.get("rrf_similarity")
                 or chunk.get("hybrid_similarity")
                 or 0.0
             ),
-            "dense": float(chunk.get("dense_score") or 0.0),
-            "bm25": float(chunk.get("bm25_score") or chunk.get("score") or 0.0),
+            "dense": _round_score(chunk.get("dense_score") or 0.0),
+            "bm25": _round_score(chunk.get("bm25_score") or chunk.get("score") or 0.0),
         },
     }
 
@@ -36,7 +45,7 @@ def public_link(link: dict[str, Any], *, rank: int) -> dict[str, Any]:
         "url": str(link.get("url") or "").strip(),
         "text": str(link.get("text") or "").strip(),
         "score": (
-            float(link["score"]) if link.get("score") is not None else None
+            _round_score(link["score"]) if link.get("score") is not None else None
         ),
     }
 

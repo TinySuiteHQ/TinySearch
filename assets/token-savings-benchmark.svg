@@ -23,7 +23,7 @@
       </g>
 
       <!-- Headline stat -->
-      <text x="48" y="104" font-size="42" font-weight="600" fill="#48705C">95% fewer tokens</text>
+      <text x="48" y="104" font-size="42" font-weight="600" fill="#48705C">64% fewer tokens</text>
 
       <!-- Legend -->
       <g transform="translate(900,54)" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" font-size="13" font-weight="500">
@@ -43,11 +43,11 @@
         <line x1="0" y1="300" x2="480" y2="300" stroke="#DDE3EC" stroke-width="1" />
 
         <rect x="70" y="34" width="120" height="266" rx="6" fill="url(#cutHatch)" stroke="#A2453C" stroke-width="1" />
-        <text x="130" y="24" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">24,044</text>
+        <text x="130" y="24" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">18,360</text>
         <text x="130" y="322" font-size="13" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#556070" text-anchor="middle">Naive</text>
 
-        <rect x="290" y="287" width="120" height="13" rx="6" fill="#48705C" />
-        <text x="350" y="277" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">1,133</text>
+        <rect x="290" y="203" width="120" height="97" rx="6" fill="#48705C" />
+        <text x="350" y="193" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">6,678</text>
         <text x="350" y="322" font-size="13" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#556070" text-anchor="middle">TinySearch</text>
       </g>
 
@@ -58,17 +58,17 @@
         <line x1="0" y1="300" x2="480" y2="300" stroke="#DDE3EC" stroke-width="1" />
 
         <rect x="70" y="34" width="120" height="266" rx="6" fill="url(#cutHatch)" stroke="#A2453C" stroke-width="1" />
-        <text x="130" y="24" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">$72.13</text>
+        <text x="130" y="24" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">$55.08</text>
         <text x="130" y="322" font-size="13" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#556070" text-anchor="middle">Naive</text>
 
-        <rect x="290" y="287" width="120" height="13" rx="6" fill="#48705C" />
-        <text x="350" y="277" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">$3.40</text>
+        <rect x="290" y="203" width="120" height="97" rx="6" fill="#48705C" />
+        <text x="350" y="193" font-size="17" font-weight="600" fill="#14213D" text-anchor="middle">$20.03</text>
         <text x="350" y="322" font-size="13" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#556070" text-anchor="middle">TinySearch</text>
       </g>
 
       <!-- Footer -->
       <line x1="48" y1="520" x2="1152" y2="520" stroke="#DDE3EC" stroke-width="1" />
-      <text x="48" y="544" font-size="12" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#8891A0">n = 8 queries, same crawled pages. scripts/benchmark_token_savings.py</text>
+      <text x="48" y="544" font-size="12" font-family="'Inter',ui-sans-serif,system-ui,sans-serif" fill="#8891A0">n = 8 queries, MCP tool-result text, same crawled pages. scripts/benchmark_token_savings.py</text>
     </g>
   </g>
 </svg>

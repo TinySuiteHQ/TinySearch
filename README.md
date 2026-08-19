@@ -92,12 +92,20 @@ That lowers cost in three ways:
 
 Search broadly. Read locally. Pay the model only for the evidence that matters.
 
+This is retrieval, not summarization: TinySearch selects the passages worth
+keeping with local BM25 and embedding rerank, it doesn't run a model over the
+page to rewrite or condense it. Every returned chunk is the original page
+text, unedited, so what you cite is what the page actually said. That keeps
+the pipeline fast and free to run locally, at the cost of not compacting as
+aggressively as a dedicated reduction model could. A learned reduction step
+is a direction we may explore later; it isn't part of TinySearch today.
+
 Actual savings depend on the pages, evidence limits, client model, and provider
 pricing. TinySearch reduces the web content sent to the model; it does not
 control what the client does with that evidence afterward.
 
 <p align="center">
-  <img src="assets/token-savings-benchmark.svg" alt="Benchmark: TinySearch uses 95% fewer tokens than a naive search-and-fetch agent across 8 research queries, cutting modeled input cost per 1,000 queries from $72.13 to $3.40 at $3 per million tokens" width="900" />
+  <img src="assets/token-savings-benchmark.svg" alt="Benchmark: TinySearch uses 64% fewer tokens than a naive search-and-fetch agent across 8 research queries, cutting modeled input cost per 1,000 queries from $55.08 to $20.03 at $3 per million tokens" width="900" />
 </p>
 
 The cost panel uses an illustrative $3.00 per million input-token rate and
@@ -106,7 +114,10 @@ excludes search, crawling, model output, and downstream agent use.
 The naive baseline isn't a strawman product, it's the same pages TinySearch
 crawled for each query, fed to the model unfiltered, the way a generic
 "search, then fetch the page" tool (a plain web-search-plus-fetch loop, the
-kind built into most coding agents) would. Reproduce or rerun it yourself:
+kind built into most coding agents) would. Measured against the current
+recommended flow (`search` then `scrape_urls`, not the deprecated
+all-in-one `research` tool) and counted on the actual MCP tool-result text,
+TinySearch's primary interface. Reproduce or rerun it yourself:
 
 ```bash
 python scripts/benchmark_token_savings.py --json-out report.json
@@ -308,18 +319,21 @@ omitting `browser_cdp_url` from their partial update.
 
 ## Why TinySearch
 
+- **No vendor in the loop.** No TinySearch account, no required API key, no
+  per-request billing, no analytics service or hosted scraped-data cache. The
+  infrastructure you'd otherwise pay a search API for runs on your machine.
+- **Source-grounded by construction.** Every evidence chunk is the original
+  page text, still attached to its originating URL, so a claim in your
+  agent's answer traces back to one specific passage instead of stopping at
+  "the vendor's model said this."
 - **Built around token efficiency.** Page selection and passage selection
-  happen before content enters model context.
-- **Source-grounded by construction.** Every evidence group stays attached to
-  its originating URL.
+  happen locally, before content enters model context.
 - **Useful without paid infrastructure.** DDGS search and local ONNX embeddings
   are the defaults.
 - **Bring your own stack when needed.** SearXNG and OpenAI-compatible embedding
   providers remain optional.
 - **Works where agents already work.** Use MCP over stdio, Streamable HTTP,
   Python, FastAPI, or Docker.
-- **Self-hosted and inspectable.** No TinySearch account, analytics service, or
-  hosted scraped-data cache.
 
 ## Part of TinySuite
 
