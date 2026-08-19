@@ -331,6 +331,31 @@ def _published_at(item: dict[str, Any]) -> str | None:
     return None
 
 
+def _unresponsive_engine_names(payload: dict[str, Any]) -> list[str]:
+    """Extract engine names from SearXNG's `unresponsive_engines` field.
+
+    SearXNG reports these as `[["google", "CAPTCHA"], ...]` engine/reason
+    pairs, but the shape has varied across versions and a bare list of names
+    also appears, so both are accepted.
+    """
+    raw = payload.get("unresponsive_engines")
+    if not isinstance(raw, list):
+        return []
+    names: list[str] = []
+    for entry in raw:
+        if isinstance(entry, str):
+            name = entry.strip()
+        elif isinstance(entry, (list, tuple)) and entry:
+            engine = str(entry[0]).strip()
+            reason = str(entry[1]).strip() if len(entry) > 1 else ""
+            name = f"{engine} ({reason})" if reason else engine
+        else:
+            continue
+        if name:
+            names.append(name)
+    return names
+
+
 def _searxng_search(
     query: str,
     limit: int,
@@ -416,6 +441,20 @@ def _searxng_search(
         if len(out) >= limit:
             break
 
+    if not out:
+        unresponsive = _unresponsive_engine_names(payload)
+        if unresponsive:
+            # SearXNG answers 200 with an empty result set when its engines are
+            # rate-limited, CAPTCHA-challenged, or suspended; the failure shows
+            # up in `unresponsive_engines`, not in the status code. Returned as
+            # a successful empty list it is indistinguishable from a genuine
+            # no-match, so callers report "nothing found" while the whole search
+            # layer is down and the configured fallback never engages.
+            raise SearchBackendBlocked(
+                "SearXNG returned no results; engines unresponsive: "
+                + ", ".join(unresponsive)
+            )
+
     return out
 
 
@@ -486,11 +525,23 @@ def _dispatch_search_with_metadata(
             query, limit, url=url, engines=engines, region=str(region) or None
         ), "searxng")
     except SearchBackendError:
-        if fallback_enabled:
-            return SearchResponse(_ddgs_search(
-                query, limit, region=str(region) or None, backend="duckduckgo", timeout=ddgs_timeout
-            ), "duckduckgo")
-        raise
+        if not fallback_enabled:
+            # Fallback disabled means SearXNG-only by policy: a deployment that
+            # requires every query to leave through its own instance must not be
+            # silently redirected to DDGS or Brave.
+            raise
+        return _with_brave_fallback_with_metadata(
+            lambda: _ddgs_search(
+                query,
+                limit,
+                region=str(region) or None,
+                backend="duckduckgo",
+                timeout=ddgs_timeout,
+            ),
+            query,
+            limit,
+            primary_backend="duckduckgo",
+        )
 
 
 def _dispatch_search(

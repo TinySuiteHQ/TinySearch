@@ -303,6 +303,54 @@ class SearXNGBackendTests(unittest.TestCase):
             results = _searxng_search("q", 5, url="http://searxng:8080/search")
         self.assertEqual(results, [])
 
+    def test_searxng_empty_results_with_unresponsive_engines_raises_blocked(self) -> None:
+        """A rate-limited/CAPTCHA'd instance answers 200 with zero results.
+
+        Treated as success it is indistinguishable from a genuine no-match, so
+        the caller's configured fallback never engages and the outage is
+        reported to the user as "nothing found".
+        """
+        payload = json.dumps(
+            {
+                "results": [],
+                "unresponsive_engines": [["google", "CAPTCHA"], ["bing", "timeout"]],
+            }
+        )
+        with patch.object(
+            web_search_service, "urlopen", new=_make_urlopen_returning(payload)
+        ):
+            with self.assertRaises(SearchBackendBlocked) as ctx:
+                _searxng_search("q", 5, url="http://searxng:8080/search")
+        message = str(ctx.exception)
+        self.assertIn("google (CAPTCHA)", message)
+        self.assertIn("bing (timeout)", message)
+
+    def test_searxng_accepts_bare_string_unresponsive_engine_names(self) -> None:
+        payload = json.dumps({"results": [], "unresponsive_engines": ["duckduckgo"]})
+        with patch.object(
+            web_search_service, "urlopen", new=_make_urlopen_returning(payload)
+        ):
+            with self.assertRaises(SearchBackendBlocked) as ctx:
+                _searxng_search("q", 5, url="http://searxng:8080/search")
+        self.assertIn("duckduckgo", str(ctx.exception))
+
+    def test_searxng_partial_engine_failure_still_returns_results(self) -> None:
+        """Degraded is not down: usable results outrank a partial engine failure."""
+        payload = json.dumps(
+            {
+                "results": [
+                    {"title": "Hit", "url": "https://example.com/", "content": "snippet"}
+                ],
+                "unresponsive_engines": [["google", "CAPTCHA"]],
+            }
+        )
+        with patch.object(
+            web_search_service, "urlopen", new=_make_urlopen_returning(payload)
+        ):
+            results = _searxng_search("q", 5, url="http://searxng:8080/search")
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Hit")
+
 
 class DdgsSearchTests(unittest.TestCase):
     def test_ddgs_maps_title_href_body_to_search_results(self) -> None:
@@ -608,6 +656,57 @@ class DispatcherTests(unittest.TestCase):
 
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0].title, "DDG")
+
+    def test_suspended_searxng_reaches_brave_through_ddgs(self) -> None:
+        """The production path: SearXNG blocked, DDGS also blocked, Brave answers.
+
+        The searxng branch previously had no Brave escape hatch at all, unlike
+        the ddgs/duckduckgo branches, so a suspension storm that took out both
+        scraped backends had nowhere left to go.
+        """
+        def blocked_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
+            raise SearchBackendBlocked("engines unresponsive: google (CAPTCHA)")
+
+        def blocked_ddgs(*args: Any, **kwargs: Any) -> list[SearchResult]:
+            raise SearchBackendBlocked("ddgs rate limited")
+
+        with patch.dict("os.environ", {BRAVE_API_KEY_ENV_VAR: "secret-key"}), patch.object(
+            web_search_service, "_searxng_search", new=blocked_searxng
+        ), patch.object(
+            web_search_service, "_ddgs_search", new=blocked_ddgs
+        ), patch.object(
+            web_search_service,
+            "_brave_search",
+            return_value=[SearchResult(1, "Brave", "https://brave.example/", "")],
+        ):
+            results = _dispatch_search(
+                "q", 5, config=self._config(search_backend_fallback=True)
+            )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].title, "Brave")
+
+    def test_suspended_searxng_does_not_reach_brave_when_fallback_disabled(self) -> None:
+        """Fallback disabled means SearXNG-only: no silent detour to Brave.
+
+        Deployments that require every query to leave through their own
+        instance would otherwise have that guarantee broken by the new hatch.
+        """
+        def blocked_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
+            raise SearchBackendBlocked("engines unresponsive: google (CAPTCHA)")
+
+        with patch.dict("os.environ", {BRAVE_API_KEY_ENV_VAR: "secret-key"}), patch.object(
+            web_search_service, "_searxng_search", new=blocked_searxng
+        ), patch.object(web_search_service, "_brave_search") as brave_mock, patch.object(
+            web_search_service, "_ddgs_search"
+        ) as ddgs_mock:
+            with self.assertRaises(SearchBackendError):
+                _dispatch_search(
+                    "q", 5, config=self._config(search_backend_fallback=False)
+                )
+
+        brave_mock.assert_not_called()
+        ddgs_mock.assert_not_called()
 
     def test_searxng_failure_raises_when_fallback_disabled(self) -> None:
         def failing_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
