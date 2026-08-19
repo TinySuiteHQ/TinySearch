@@ -1,0 +1,100 @@
+{
+  "methodology": "Naive baseline = raw search-result snippets (search step) + full unfiltered markdown of the top-ranked pages scrape_urls actually fetched for the query, before local reranking/chunking. TinySearch value = tokens in the XML text an MCP client receives as the scrape_urls tool-result for the same pages and query (TinySearch's primary interface; the Python/FastAPI JSON contracts carry extra score/rank metadata the MCP rendering strips, so raw-JSON callers see a somewhat larger number than this). Page selection is held constant (same URLs, same rank order search returned) so the delta isolates local compaction, not retrieval quality.",
+  "generated_at": "2026-08-19T07:28:11Z",
+  "queries": [
+    {
+      "query": "what is the walrus operator in Python",
+      "pages_fetched": 3,
+      "naive_snippet_tokens": 908,
+      "naive_page_tokens": 35769,
+      "naive_tokens": 36677,
+      "tinysearch_tokens": 7421,
+      "tokens_saved": 29256,
+      "pct_saved": 79.7666112277449,
+      "elapsed_s": 19.514135400007945
+    },
+    {
+      "query": "how does TCP congestion control work",
+      "pages_fetched": 3,
+      "naive_snippet_tokens": 804,
+      "naive_page_tokens": 16865,
+      "naive_tokens": 17669,
+      "tinysearch_tokens": 5653,
+      "tokens_saved": 12016,
+      "pct_saved": 68.00611240024902,
+      "elapsed_s": 8.270802400016692
+    },
+    {
+      "query": "what is a bloom filter used for",
+      "pages_fetched": 3,
+      "naive_snippet_tokens": 1024,
+      "naive_page_tokens": 28274,
+      "naive_tokens": 29298,
+      "tinysearch_tokens": 7008,
+      "tokens_saved": 22290,
+      "pct_saved": 76.08027851730493,
+      "elapsed_s": 13.88813130001654
+    },
+    {
+      "query": "explain the CAP theorem in distributed systems",
+      "pages_fetched": 3,
+      "naive_snippet_tokens": 921,
+      "naive_page_tokens": 7530,
+      "naive_tokens": 8451,
+      "tinysearch_tokens": 7298,
+      "tokens_saved": 1153,
+      "pct_saved": 13.643355815879776,
+      "elapsed_s": 8.955842700001085
+    },
+    {
+      "query": "what is the difference between REST and gRPC",
+      "pages_fetched": 3,
+      "naive_snippet_tokens": 975,
+      "naive_page_tokens": 9552,
+      "naive_tokens": 10527,
+      "tinysearch_tokens": 7495,
+      "tokens_saved": 3032,
+      "pct_saved": 28.80212786168899,
+      "elapsed_s": 9.679263099998934
+    },
+    {
+      "query": "how does DNS resolution work",
+      "pages_fetched": 3,
+      "naive_snippet_tokens": 871,
+      "naive_page_tokens": 6522,
+      "naive_tokens": 7393,
+      "tinysearch_tokens": 7004,
+      "tokens_saved": 389,
+      "pct_saved": 5.2617340727715405,
+      "elapsed_s": 7.5967764999950305
+    },
+    {
+      "query": "what is a Bloom filter false positive rate",
+      "pages_fetched": 3,
+      "naive_snippet_tokens": 1065,
+      "naive_page_tokens": 24890,
+      "naive_tokens": 25955,
+      "tinysearch_tokens": 4751,
+      "tokens_saved": 21204,
+      "pct_saved": 81.69524176459257,
+      "elapsed_s": 10.22303570000804
+    },
+    {
+      "query": "how does garbage collection work in the JVM",
+      "pages_fetched": 3,
+      "naive_snippet_tokens": 947,
+      "naive_page_tokens": 9961,
+      "naive_tokens": 10908,
+      "tinysearch_tokens": 6796,
+      "tokens_saved": 4112,
+      "pct_saved": 37.697103043637696,
+      "elapsed_s": 9.451199800008908
+    }
+  ],
+  "totals": {
+    "naive_tokens": 146878,
+    "tinysearch_tokens": 53426,
+    "tokens_saved": 93452,
+    "pct_saved": 63.625594030419805
+  }
+}

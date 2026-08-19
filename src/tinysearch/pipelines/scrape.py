@@ -9,9 +9,16 @@ from typing import Any
 
 from tinysearch.config import normalize_config
 from tinysearch.services.embedding_service import create_embedder
+from rank_bm25 import BM25Okapi
+
 from tinysearch.services.hybrid_embed_search_service import (
     EmbeddingFn,
     rank_chunks_hybrid,
+    tokenize_for_retrieval,
+)
+from tinysearch.services.link_extraction_service import (
+    extract_links_from_html,
+    sanitize_and_dedupe_links,
 )
 from tinysearch.services.tinysearch_config_service import tokenizer_name_for_config
 from tinysearch.services.scrape_service import (
@@ -37,6 +44,102 @@ from tinysearch.services.site_crawl_service import (
 )
 from tinysearch.services.text_chunking_service import chunk_text
 from tinysearch.services.url_safety_service import assert_url_is_fetchable
+
+
+# Bounds embedding cost on link-heavy pages; ranking only ever returns
+# `max_links` of these, but every candidate in the pool gets embedded.
+_MAX_LINK_CANDIDATES = 100
+
+
+def _prefilter_links_by_bm25(
+    candidate_links: list[dict[str, str]],
+    query: str,
+    limit: int,
+) -> list[dict[str, str]]:
+    """Pick the `limit` most lexically relevant links before the expensive rerank.
+
+    A link-dense page (a news homepage, say) can carry hundreds of anchors;
+    truncating to the first `limit` in DOM order would silently drop a
+    genuinely relevant link that happens to sit later on the page, before it
+    ever gets a chance to be scored. A cheap BM25 pass over the full
+    candidate set keeps embedding cost bounded without that blind spot.
+    """
+    if len(candidate_links) <= limit:
+        return candidate_links
+    query_tokens = tokenize_for_retrieval(query)
+    if not query_tokens:
+        return candidate_links[:limit]
+    corpus = [
+        tokenize_for_retrieval(f"{link['text']} {link['context']}")
+        for link in candidate_links
+    ]
+    if not any(corpus):
+        # BM25Okapi divides by average document length; an all-empty corpus
+        # (e.g. image-only nav links with no text or context) makes that
+        # zero. Nothing to lexically rank in that case, so keep DOM order.
+        return candidate_links[:limit]
+    scores = BM25Okapi(corpus).get_scores(query_tokens)
+    ranked_indices = sorted(
+        range(len(candidate_links)), key=lambda idx: scores[idx], reverse=True
+    )
+    return [candidate_links[idx] for idx in ranked_indices[:limit]]
+
+
+async def _select_top_links(
+    candidate_links: list[dict[str, str]],
+    *,
+    query: str,
+    max_links: int,
+    embedder: EmbeddingFn | None,
+    resolved: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Rank candidate links against `query`, or fall back to page order.
+
+    Reuses the same hybrid BM25 + dense retrieval as content-chunk ranking
+    (see `hybrid_embed_search_service.rank_chunks_hybrid`), scoring each
+    link's text plus nearby page context. Falls back to unranked page-order
+    when there is no real query (raw page-order requests) to rank against.
+    """
+    if not candidate_links or max_links <= 0:
+        return []
+    if not query or embedder is None:
+        return [
+            {"url": link["url"], "text": link["text"] or link["url"], "score": None}
+            for link in candidate_links[:max_links]
+        ]
+    pool = _prefilter_links_by_bm25(candidate_links, query, _MAX_LINK_CANDIDATES)
+    link_chunks = [
+        {
+            "url": link["url"],
+            "link_text": link["text"],
+            "text": f"{link['text']} {link['context']}".strip(),
+        }
+        for link in pool
+    ]
+    ranked = await rank_chunks_hybrid(
+        query,
+        link_chunks,
+        embedder=embedder,
+        top_k=max_links,
+        rrf_similarity_cutoff=resolved["chunk_rrf_cutoff"],
+        dense_weight=resolved["chunk_dense_weight"],
+        dense_query_prefix=resolved["dense_query_prefix"],
+        dense_document_prefix=resolved["dense_document_prefix"],
+        dense_document_embed_batch_size=resolved["dense_document_embed_batch_size"],
+        semaphore=asyncio.Semaphore(
+            max(1, resolved["max_concurrent_embedding_calls"])
+        ),
+        timeout_seconds=resolved["embedding_timeout_seconds"],
+        max_timeout_retries=resolved["embedding_timeout_retries"],
+    )
+    return [
+        {
+            "url": item["url"],
+            "text": item.get("link_text") or item["url"],
+            "score": float(item.get("rrf_similarity") or 0.0),
+        }
+        for item in ranked
+    ]
 
 
 async def run_scrape_pipeline(
@@ -77,6 +180,7 @@ async def run_scrape_pipeline(
     markdown = ""
     html = ""
     crawl_metadata: dict[str, Any] = {}
+    candidate_links: list[dict[str, str]] = []
 
     if is_document:
         suffix = url_path_suffix(safe_url)
@@ -114,6 +218,11 @@ async def run_scrape_pipeline(
         crawl_metadata = page.get("metadata") or {}
         if final_url != safe_url:
             final_url = assert_url_is_fetchable(final_url, blocked_domains)
+        candidate_links = sanitize_and_dedupe_links(
+            extract_links_from_html(html, final_url),
+            base_url=final_url,
+            blocked_domains=blocked_domains,
+        )
         markdown_raw = str(page.get("markdown_raw") or "")
         markdown_fit = str(page.get("markdown_fit") or "")
         markdown = markdown_raw if raw_page_order else markdown_fit or markdown_raw
@@ -135,6 +244,13 @@ async def run_scrape_pipeline(
             metadata = {"description": None, "author": None, "published_date": None}
         else:
             metadata = extract_metadata(crawl_metadata, html)
+        links = await _select_top_links(
+            candidate_links,
+            query="",
+            max_links=int(resolved["scrape_max_links"]),
+            embedder=None,
+            resolved=resolved,
+        )
         return ScrapeResult(
             url=final_url,
             title=title,
@@ -144,6 +260,7 @@ async def run_scrape_pipeline(
             truncated=len(tokens) > max_tokens,
             retrieved_at=utc_iso8601_z(),
             metadata=metadata,
+            links=links,
         )
 
     chunks = chunk_text(
@@ -165,6 +282,13 @@ async def run_scrape_pipeline(
                 else None
             ),
         )
+    links = await _select_top_links(
+        candidate_links,
+        query=cleaned_query,
+        max_links=int(resolved["scrape_max_links"]),
+        embedder=embedder,
+        resolved=resolved,
+    )
     ranked = await rank_chunks_hybrid(
         cleaned_query,
         chunks,
@@ -210,4 +334,5 @@ async def run_scrape_pipeline(
         truncated=truncated,
         retrieved_at=utc_iso8601_z(),
         metadata=metadata,
+        links=links,
     )

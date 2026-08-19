@@ -176,7 +176,10 @@ The research tool is deprecated. Use search instead.
 Use scrape_urls after URLs are already known. Pass one to five independent
 URL/query pairs. Omit an item's query or pass `*` to receive the configured
 2,000-token budget of clean Markdown in page order; supply a focused query
-only when relevant chunks should be selected.
+only when relevant chunks should be selected. Each page also returns a
+bounded list of related_links -- links found on that page, ranked against
+the query -- so you can decide which page to open next. It does not crawl
+them automatically.
 """.strip()
 
 

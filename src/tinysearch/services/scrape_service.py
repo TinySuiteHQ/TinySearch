@@ -6,7 +6,7 @@ import asyncio
 import socket
 import urllib.error
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from html.parser import HTMLParser
 from typing import Any
@@ -22,6 +22,7 @@ from tinysearch.services.url_safety_service import (
 
 
 DEFAULT_SCRAPE_MAX_TOKENS = 4000
+DEFAULT_SCRAPE_MAX_LINKS = 8
 
 
 class ScrapeError(Exception):
@@ -64,6 +65,7 @@ class ScrapeResult:
     truncated: bool
     retrieved_at: str
     metadata: dict[str, str | None] | None = None
+    links: list[dict[str, Any]] = field(default_factory=list)
 
     def to_response(self, *, include_metadata: bool) -> dict[str, Any]:
         payload = asdict(self)

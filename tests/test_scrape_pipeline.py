@@ -127,6 +127,70 @@ async def _fake_html_empty(*, url, user_query, bm25_threshold, bm25_language):
     }
 
 
+async def _fake_html_page_with_links(*, url, user_query, bm25_threshold, bm25_language):
+    return {
+        "final_url": url,
+        "html": (
+            "<html><head><title>Example Article</title></head><body>"
+            "<p>Read more about async programming techniques.</p>"
+            '<p><a href="/async-guide">Async Guide</a></p>'
+            '<p><a href="/bread-recipes">Bread Recipes</a></p>'
+            '<a href="#top">Back to top</a>'
+            '<a href="javascript:void(0)">JS trigger</a>'
+            '<a href="https://blocked.example/x">Blocked Site</a>'
+            "</body></html>"
+        ),
+        "markdown_raw": (
+            "# Section A\n\nPython asyncio guide explains async tasks."
+        ),
+        "markdown_fit": (
+            "# Section A\n\nPython asyncio guide explains async tasks."
+        ),
+        "metadata": {"title": "Example Article"},
+    }
+
+
+async def _fake_html_page_many_links(*, url, user_query, bm25_threshold, bm25_language):
+    filler = "".join(f'<a href="/filler-{i}">Filler {i}</a>' for i in range(150))
+    return {
+        "final_url": url,
+        "html": (
+            "<html><head><title>Example Article</title></head><body>"
+            f"{filler}"
+            '<a href="/async-guide">Async Guide</a>'
+            "</body></html>"
+        ),
+        "markdown_raw": (
+            "# Section A\n\nPython asyncio guide explains async tasks."
+        ),
+        "markdown_fit": (
+            "# Section A\n\nPython asyncio guide explains async tasks."
+        ),
+        "metadata": {"title": "Example Article"},
+    }
+
+
+async def _fake_html_page_image_only_links(*, url, user_query, bm25_threshold, bm25_language):
+    # No <title>, alt text, or surrounding text, so every link's
+    # `text`/`context` tokenizes to nothing -- an all-empty BM25 corpus.
+    # (A page <title> would otherwise leak into every link's leading
+    # context via the parser's shared context buffer.)
+    filler = "".join(
+        f'<a href="/img-{i}"><img src="pic{i}.png"></a>' for i in range(150)
+    )
+    return {
+        "final_url": url,
+        "html": f"<html><head></head><body>{filler}</body></html>",
+        "markdown_raw": (
+            "# Section A\n\nPython asyncio guide explains async tasks."
+        ),
+        "markdown_fit": (
+            "# Section A\n\nPython asyncio guide explains async tasks."
+        ),
+        "metadata": {"title": "Example Article"},
+    }
+
+
 def _fake_document(url: str) -> tuple[str, str]:
     return (
         "## Page 1\n\nPython asyncio guide explains async tasks.\n\n## Page 2\n\nMore content.",
@@ -297,6 +361,167 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.query, "What does THIS page say about 'Async/Await'?")
         self.assertIn("What does THIS page say about 'Async/Await'?", _answer(result))
+
+
+class ScrapeUrlLinksTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ranked_query_returns_bounded_safe_links(self) -> None:
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(scrape_max_links=1),
+                embedder=_fake_embedder,
+                crawl_fn=_fake_html_page_with_links,
+            )
+
+        self.assertEqual(len(result.links), 1)
+        link = result.links[0]
+        self.assertIn(link["url"], {
+            "https://example.com/async-guide",
+            "https://example.com/bread-recipes",
+            "https://blocked.example/x",
+        })
+        self.assertIsInstance(link["score"], float)
+        urls = {l["url"] for l in result.links}
+        self.assertNotIn("https://example.com/article", urls)
+
+    async def test_raw_page_order_returns_unranked_page_order_links_without_embedding(
+        self,
+    ) -> None:
+        async def should_not_embed(_inputs: list[str]) -> list[list[float]]:
+            self.fail("raw page-order scrape must not create embeddings for links")
+
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                None,
+                config=_config(),
+                embedder=should_not_embed,
+                crawl_fn=_fake_html_page_with_links,
+            )
+
+        self.assertEqual(
+            [link["url"] for link in result.links],
+            [
+                "https://example.com/async-guide",
+                "https://example.com/bread-recipes",
+                "https://blocked.example/x",
+            ],
+        )
+        for link in result.links:
+            self.assertIsNone(link["score"])
+
+    async def test_fragment_javascript_and_blocked_links_are_excluded(self) -> None:
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(blocked_domains=["blocked.example"]),
+                embedder=_fake_embedder,
+                crawl_fn=_fake_html_page_with_links,
+            )
+
+        urls = {link["url"] for link in result.links}
+        self.assertEqual(
+            urls,
+            {"https://example.com/async-guide", "https://example.com/bread-recipes"},
+        )
+
+    async def test_relevant_link_beyond_candidate_pool_still_surfaces(self) -> None:
+        # 150 irrelevant filler links precede the one relevant link in DOM
+        # order, well past the internal candidate-pool cap; a naive
+        # DOM-order truncation before ranking would drop it before it's
+        # ever scored. The BM25 pre-filter must pull it into the pool.
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(scrape_max_links=3),
+                embedder=_fake_embedder,
+                crawl_fn=_fake_html_page_many_links,
+            )
+
+        urls = [link["url"] for link in result.links]
+        self.assertIn("https://example.com/async-guide", urls)
+
+    async def test_image_only_links_beyond_pool_do_not_crash_bm25_prefilter(
+        self,
+    ) -> None:
+        # 150 image-only anchors with no alt text or surrounding text push
+        # the candidate pool past the BM25 pre-filter's cap while every
+        # candidate tokenizes to an empty string; the pre-filter must fall
+        # back to DOM order instead of dividing by a zero average doc length.
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(scrape_max_links=3),
+                embedder=_fake_embedder,
+                crawl_fn=_fake_html_page_image_only_links,
+            )
+
+        self.assertEqual(len(result.links), 3)
+
+    async def test_links_surface_in_grounded_answer_prompt(self) -> None:
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(),
+                embedder=_fake_embedder,
+                crawl_fn=_fake_html_page_with_links,
+            )
+
+        from tinysearch.results import public_link
+
+        payload = result_envelope(
+            operation="scrape",
+            status="ok",
+            query=result.query,
+            retrieved_at=result.retrieved_at,
+            sources=[
+                {
+                    "id": "1",
+                    "title": result.title,
+                    "url": result.url,
+                    "metadata": result.metadata or {},
+                    "chunks": [
+                        public_chunk(chunk, rank=rank)
+                        for rank, chunk in enumerate(result.chunks, start=1)
+                    ],
+                    "links": [
+                        public_link(link, rank=rank)
+                        for rank, link in enumerate(result.links, start=1)
+                    ],
+                }
+            ],
+            stats={"content_tokens": result.content_tokens, "truncated": result.truncated},
+        )
+        from tinysearch.services.grounded_prompt_service import format_url_grounded_answers
+
+        text = format_url_grounded_answers(
+            results=[{"status": "ok", "result": payload}]
+        )
+        self.assertIn("<related_links>", text)
+        self.assertIn("https://example.com/async-guide", text)
 
 
 class ScrapeUrlBudgetTests(unittest.IsolatedAsyncioTestCase):

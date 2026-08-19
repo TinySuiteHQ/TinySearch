@@ -26,6 +26,7 @@ from tinysearch.services.web_search_service import (
 DEFAULT_CONFIG: dict[str, Any] = {
     "search_max_results": 10,
     "scrape_max_tokens": 2000,
+    "scrape_max_links": 8,
     "search_top_k": 10,
     "search_rrf_cutoff": 0.0,
     "search_dense_weight": 0.5,
@@ -74,6 +75,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
 _INT_FIELDS = {
     "search_max_results",
     "scrape_max_tokens",
+    "scrape_max_links",
     "search_top_k",
     "search_max_results_to_keep",
     "chunk_max_results_to_keep",
