@@ -73,6 +73,11 @@ def _prefilter_links_by_bm25(
         tokenize_for_retrieval(f"{link['text']} {link['context']}")
         for link in candidate_links
     ]
+    if not any(corpus):
+        # BM25Okapi divides by average document length; an all-empty corpus
+        # (e.g. image-only nav links with no text or context) makes that
+        # zero. Nothing to lexically rank in that case, so keep DOM order.
+        return candidate_links[:limit]
     scores = BM25Okapi(corpus).get_scores(query_tokens)
     ranked_indices = sorted(
         range(len(candidate_links)), key=lambda idx: scores[idx], reverse=True

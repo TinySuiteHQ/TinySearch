@@ -170,6 +170,27 @@ async def _fake_html_page_many_links(*, url, user_query, bm25_threshold, bm25_la
     }
 
 
+async def _fake_html_page_image_only_links(*, url, user_query, bm25_threshold, bm25_language):
+    # No <title>, alt text, or surrounding text, so every link's
+    # `text`/`context` tokenizes to nothing -- an all-empty BM25 corpus.
+    # (A page <title> would otherwise leak into every link's leading
+    # context via the parser's shared context buffer.)
+    filler = "".join(
+        f'<a href="/img-{i}"><img src="pic{i}.png"></a>' for i in range(150)
+    )
+    return {
+        "final_url": url,
+        "html": f"<html><head></head><body>{filler}</body></html>",
+        "markdown_raw": (
+            "# Section A\n\nPython asyncio guide explains async tasks."
+        ),
+        "markdown_fit": (
+            "# Section A\n\nPython asyncio guide explains async tasks."
+        ),
+        "metadata": {"title": "Example Article"},
+    }
+
+
 def _fake_document(url: str) -> tuple[str, str]:
     return (
         "## Page 1\n\nPython asyncio guide explains async tasks.\n\n## Page 2\n\nMore content.",
@@ -434,6 +455,27 @@ class ScrapeUrlLinksTests(unittest.IsolatedAsyncioTestCase):
 
         urls = [link["url"] for link in result.links]
         self.assertIn("https://example.com/async-guide", urls)
+
+    async def test_image_only_links_beyond_pool_do_not_crash_bm25_prefilter(
+        self,
+    ) -> None:
+        # 150 image-only anchors with no alt text or surrounding text push
+        # the candidate pool past the BM25 pre-filter's cap while every
+        # candidate tokenizes to an empty string; the pre-filter must fall
+        # back to DOM order instead of dividing by a zero average doc length.
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(scrape_max_links=3),
+                embedder=_fake_embedder,
+                crawl_fn=_fake_html_page_image_only_links,
+            )
+
+        self.assertEqual(len(result.links), 3)
 
     async def test_links_surface_in_grounded_answer_prompt(self) -> None:
         with patch(
