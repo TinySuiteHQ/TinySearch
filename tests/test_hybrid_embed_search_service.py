@@ -63,6 +63,23 @@ class HybridEmbedSearchServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("rrf_score", ranked[0])
         self.assertIn("rrf_similarity", ranked[0])
 
+    async def test_ranked_chunks_carry_dense_embedding_for_reuse(self) -> None:
+        # Semantic dedup downstream reuses these vectors instead of re-embedding.
+        chunks = [
+            {"chunk_id": "python", "text": "Python asyncio search uses async tasks."},
+            {"chunk_id": "bread", "text": "Bread recipes use flour and yeast."},
+        ]
+
+        ranked = await rank_chunks_hybrid(
+            "python async search",
+            chunks,
+            embedder=_fake_embedder,
+        )
+
+        by_id = {chunk["chunk_id"]: chunk for chunk in ranked}
+        self.assertEqual(by_id["python"]["dense_embedding"], [1.0, 0.0, 0.0])
+        self.assertEqual(by_id["bread"]["dense_embedding"], [0.0, 1.0, 0.0])
+
     async def test_rank_chunks_hybrid_applies_similarity_cutoff_and_top_k(self) -> None:
         chunks = [
             {"chunk_id": "python", "text": "Python asyncio search uses async tasks."},

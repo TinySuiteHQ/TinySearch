@@ -212,6 +212,7 @@ async def rank_chunks_hybrid(
 
     dense_scores = [0.0 for _ in chunk_list]
     dense_ranks = {idx: 1 for idx in range(len(chunk_list))}
+    doc_embeddings: list[list[float]] = []
     if dense_weight > 0.0:
         query_embedding, doc_embeddings = await _embed_query_and_document_chunks(
             query,
@@ -248,18 +249,21 @@ async def rank_chunks_hybrid(
         if cutoff is not None and rrf_similarity < cutoff:
             continue
 
-        ranked.append(
-            {
-                **chunk,
-                "bm25_score": float(bm25_scores[idx]),
-                "bm25_rank": bm25_rank,
-                "dense_score": float(dense_scores[idx]),
-                "dense_rank": dense_rank,
-                "rrf_score": float(rrf_score),
-                "rrf_similarity": float(rrf_similarity),
-                "hybrid_similarity": float(rrf_similarity),
-            }
-        )
+        ranked_chunk = {
+            **chunk,
+            "bm25_score": float(bm25_scores[idx]),
+            "bm25_rank": bm25_rank,
+            "dense_score": float(dense_scores[idx]),
+            "dense_rank": dense_rank,
+            "rrf_score": float(rrf_score),
+            "rrf_similarity": float(rrf_similarity),
+            "hybrid_similarity": float(rrf_similarity),
+        }
+        # Preserve the dense document embedding so downstream selection (e.g. semantic
+        # deduplication) can reuse it via cosine similarity without re-embedding.
+        if idx < len(doc_embeddings):
+            ranked_chunk["dense_embedding"] = list(doc_embeddings[idx])
+        ranked.append(ranked_chunk)
 
     ranked.sort(
         key=lambda item: (
