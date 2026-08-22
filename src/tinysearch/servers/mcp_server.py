@@ -8,6 +8,7 @@ import time
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from pydantic import Field
 from starlette.datastructures import Headers
 from starlette.routing import BaseRoute, Mount, Route
@@ -18,6 +19,12 @@ from tinysearch.services.tinysearch_config_service import (
     tokenizer_name_for_config,
 )
 from tinysearch.services.token_counter_service import token_count
+
+# MCP 1.x defines its generic Settings model before FastMCP, leaving the
+# Settings.lifespan annotation as an unresolved forward reference. Rebuild it
+# after the module is fully imported so pydantic-settings does not warn while
+# loading environment-backed settings.
+FastMCPSettings.model_rebuild()
 
 
 def _mcp_host() -> str:

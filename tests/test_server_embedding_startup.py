@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from tinysearch.core import _ensure_local_bundle_for_config
 from tinysearch.servers.fastapi_server import (
     ResearchRequest,
@@ -94,6 +95,12 @@ class McpCorsConfigTests(unittest.TestCase):
                 _mcp_cors_origins(),
                 ["http://localhost:8080", "http://172.20.210.53:8080"],
             )
+
+
+class McpSettingsDefinitionTests(unittest.TestCase):
+    def test_lifespan_annotation_is_resolved(self) -> None:
+        self.assertTrue(FastMCPSettings.__pydantic_complete__)
+        self.assertTrue(FastMCPSettings.model_fields["lifespan"]._complete)
 
 
 if __name__ == "__main__":
