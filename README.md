@@ -317,6 +317,43 @@ the startup environment or the file selected by `TINYSEARCH_CONFIG_PATH`, then
 restart TinySearch. HTTP clients can continue updating other settings by
 omitting `browser_cdp_url` from their partial update.
 
+## Semantic deduplication of evidence
+
+Research ranks an oversampled pool of page chunks, then trims it down to the
+final evidence set. Two duplicate filters run during that trim:
+
+1. **Lexical (always on).** Token-set Jaccard drops near-identical copied text.
+   Controlled by `chunk_dedupe_jaccard_threshold` (default `0.92`; lower is more
+   aggressive, `1.0` disables it).
+2. **Semantic (optional).** Cosine similarity over the chunk embeddings already
+   computed during ranking drops syndicated, paraphrased, or reworded passages
+   that carry the same information with little literal token overlap, exactly
+   the duplicates Jaccard misses.
+
+```json
+{
+  "chunk_semantic_dedupe_enabled": true,
+  "chunk_semantic_dedupe_threshold": 0.92
+}
+```
+
+- `chunk_semantic_dedupe_enabled`: turn the semantic stage on or off. Enabled
+  by default.
+- `chunk_semantic_dedupe_threshold`: cosine similarity (`0` to `1`) above which a
+  chunk is treated as a semantic duplicate of an already-selected chunk. Lower
+  values deduplicate more aggressively; keep it conservative (~`0.92`) so
+  genuinely distinct-but-related evidence is not discarded. `1.0` effectively
+  disables the stage.
+
+**Design tradeoffs.** The semantic stage reuses embeddings from the ranking
+step, so it adds no extra embedding calls and runs on the already-bounded
+oversampled pool. It runs *after* the cheap lexical filter and compares each
+candidate against the running selected output in ranked order, so the
+highest-ranked member of a duplicate group is always the one kept, and per-source
+quotas and fill behavior are preserved. Setting the threshold too low can merge
+distinct facts that happen to be phrased similarly, which is why it defaults to a
+conservative value and can be disabled entirely.
+
 ## Why TinySearch
 
 - **No vendor in the loop.** No TinySearch account, no required API key, no

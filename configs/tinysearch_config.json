@@ -37,6 +37,10 @@
   "chunk_rank_oversample": 3,
   "_comment_chunk_dedupe_jaccard_threshold": "Research only. Near-duplicate threshold from 0 to 1. Lower values deduplicate more aggressively.",
   "chunk_dedupe_jaccard_threshold": 0.92,
+  "_comment_chunk_semantic_dedupe_enabled": "Research only. When true, adds embedding-based semantic deduplication after lexical Jaccard so syndicated or paraphrased chunks with low token overlap are dropped. Reuses ranking embeddings (no extra embedding calls).",
+  "chunk_semantic_dedupe_enabled": true,
+  "_comment_chunk_semantic_dedupe_threshold": "Research only. Cosine similarity from 0 to 1 above which a chunk is treated as a semantic duplicate of an already-selected chunk. Lower values deduplicate more aggressively; keep conservative (~0.92) to avoid dropping distinct evidence.",
+  "chunk_semantic_dedupe_threshold": 0.92,
   "_comment_chunk_max_per_source_url": "Research only. Maximum selected chunks from one URL, preventing a single page from crowding out other sources.",
   "chunk_max_per_source_url": 4,
 

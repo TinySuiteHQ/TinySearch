@@ -36,6 +36,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "chunk_max_results_to_keep": 2,
     "chunk_rank_oversample": 3,
     "chunk_dedupe_jaccard_threshold": 0.92,
+    "chunk_semantic_dedupe_enabled": True,
+    "chunk_semantic_dedupe_threshold": 0.92,
     "chunk_max_per_source_url": 4,
     "max_concurrent_crawls": 5,
     "max_concurrent_embedding_calls": 3,
@@ -96,11 +98,19 @@ _FLOAT_FIELDS = {
     "chunk_rrf_cutoff",
     "chunk_dense_weight",
     "chunk_dedupe_jaccard_threshold",
+    "chunk_semantic_dedupe_threshold",
     "crawl_bm25_threshold",
     "crawl_pruning_threshold",
     "embedding_timeout_seconds",
     "ddgs_timeout_seconds",
 }
+
+
+def _coerce_bool(value: Any) -> bool:
+    """Coerce config values (including JSON strings like "false"/"0") to bool."""
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -205,6 +215,9 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     config.pop("search_country", None)
     config["search_backend_fallback"] = bool(
         config.get("search_backend_fallback", True)
+    )
+    config["chunk_semantic_dedupe_enabled"] = _coerce_bool(
+        config.get("chunk_semantic_dedupe_enabled", True)
     )
     return config
 

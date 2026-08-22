@@ -165,6 +165,8 @@ async def run_research_pipeline(
     crawl_pruning_threshold = resolved["crawl_pruning_threshold"]
     chunk_rank_oversample = resolved["chunk_rank_oversample"]
     chunk_dedupe_jaccard_threshold = resolved["chunk_dedupe_jaccard_threshold"]
+    chunk_semantic_dedupe_enabled = resolved["chunk_semantic_dedupe_enabled"]
+    chunk_semantic_dedupe_threshold = resolved["chunk_semantic_dedupe_threshold"]
     chunk_max_per_source_url = resolved["chunk_max_per_source_url"]
     encoding_name = resolved["encoding_name"]
     embedding_backend = resolved["embedding_backend"]
@@ -217,6 +219,8 @@ async def run_research_pipeline(
             "crawl_pruning_threshold": crawl_pruning_threshold,
             "chunk_rank_oversample": chunk_rank_oversample,
             "chunk_dedupe_jaccard_threshold": chunk_dedupe_jaccard_threshold,
+            "chunk_semantic_dedupe_enabled": chunk_semantic_dedupe_enabled,
+            "chunk_semantic_dedupe_threshold": chunk_semantic_dedupe_threshold,
             "chunk_max_per_source_url": chunk_max_per_source_url,
             "encoding_name": encoding_name or "embedding",
             "tokenizer_name": None,
@@ -457,12 +461,21 @@ async def run_research_pipeline(
                 dense_document_prefix=dense_document_prefix,
                 dense_document_embed_batch_size=dense_document_embed_batch_size,
             )
+            semantic_dedupe_rejections: list[dict[str, Any]] = []
             ranked_chunk_pool = select_chunks_with_quota_and_fill(
                 ranked_wide,
                 final_limit=chunk_max_results_to_keep,
                 max_per_source_url=chunk_max_per_source_url,
                 dedupe_jaccard_threshold=chunk_dedupe_jaccard_threshold,
+                semantic_dedupe_enabled=chunk_semantic_dedupe_enabled,
+                semantic_dedupe_threshold=chunk_semantic_dedupe_threshold,
+                rejections=semantic_dedupe_rejections,
             )
+            trace["semantic_dedupe_rejections"] = semantic_dedupe_rejections
+            # Drop the reused dense embeddings now that selection is done so they do not
+            # bloat trace files or downstream chunk payloads.
+            for chunk in ranked_chunk_pool:
+                chunk.pop("dense_embedding", None)
             chunks_by_url: dict[str, list[dict[str, Any]]] = {}
             for chunk in ranked_chunk_pool:
                 chunks_by_url.setdefault(str(chunk.get("source_url") or ""), []).append(chunk)
