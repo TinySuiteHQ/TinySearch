@@ -59,9 +59,12 @@ class SearchResponse:
 class BackendResults(list[SearchResult]):
     """List-compatible backend results with a compact partial-outage signal."""
 
-    def __init__(self, values: Iterable[SearchResult], *, degraded: bool = False) -> None:
+    def __init__(
+        self, values: Iterable[SearchResult], *, degraded: bool = False, reason: str = ""
+    ) -> None:
         super().__init__(values)
         self.degraded = degraded
+        self.reason = reason
 
 
 class SearchBackendError(Exception):
@@ -486,7 +489,11 @@ def _searxng_search(
                 + ", ".join(unresponsive)
             )
 
-    return BackendResults(out, degraded=bool(unresponsive))
+    return BackendResults(
+        out,
+        degraded=bool(unresponsive),
+        reason=("unresponsive engines: " + ", ".join(unresponsive)) if unresponsive else "",
+    )
 
 
 def _load_search_config() -> dict[str, Any]:
@@ -702,12 +709,15 @@ async def search_batch_with_metadata(
                     # SearXNG can return useful results while individual engines are
                     # degraded. Its legacy list API does not expose that detail, so
                     # retain the compact observable distinction when it does.
-                    attempts.append({
+                    attempt: dict[str, Any] = {
                         "backend": backend,
                         "state": state,
                         "result_count": len(filtered),
                         "latency_ms": round((asyncio.get_running_loop().time() - attempt_started) * 1000),
-                    })
+                    }
+                    if state == "degraded" and getattr(raw_results, "reason", ""):
+                        attempt["reason"] = raw_results.reason
+                    attempts.append(attempt)
                     if filtered:
                         return BatchSearchResponse(filtered, domains, "ok", attempts, None, round((asyncio.get_running_loop().time() - started) * 1000))
                 except SearchBackendError as exc:
