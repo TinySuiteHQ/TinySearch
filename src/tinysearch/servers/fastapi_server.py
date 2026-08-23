@@ -49,9 +49,16 @@ class ResearchRequest(BaseModel):
 
 
 class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list["SearchItem"] = Field(..., min_length=1, max_length=5)
+
+
+class SearchItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     query: str = Field(..., min_length=1)
-    limit: int = Field(10, ge=1, le=50)
-    output_format: Literal["prompt", "json"] = "prompt"
+    domains: list[str] = Field(default_factory=list)
 
 
 @app.get("/health")
@@ -151,23 +158,7 @@ async def research_endpoint(request: ResearchRequest) -> dict[str, Any]:
 
 @app.post("/search")
 async def search_endpoint(request: SearchRequest) -> dict[str, Any]:
-    try:
-        result = await core.search(
-            request.query,
-            limit=request.limit,
-            config=load_tinysearch_config(),
-        )
-    except Exception as exc:
-        from tinysearch.services.web_search_service import SearchBackendError
-
-        if isinstance(exc, SearchBackendError):
-            raise HTTPException(
-                status_code=502,
-                detail={"code": "search_backend_error", "message": str(exc)},
-            ) from exc
-        raise
-    if request.output_format == "json":
-        return result
-    from tinysearch.prompts import to_prompt
-
-    return {"answer": to_prompt(result)}
+    return await core.search(
+        [item.model_dump() for item in request.items],
+        config=load_tinysearch_config(),
+    )

@@ -27,6 +27,7 @@ from tinysearch.services.web_search_service import (
     normalize_domain,
     search,
     search_with_metadata,
+    search_batch_with_metadata,
 )
 
 
@@ -167,6 +168,44 @@ class BlockedDomainTests(unittest.TestCase):
         filtered = filter_blocked_search_results(results, ["blocked.example"])
 
         self.assertEqual([result.title for result in filtered], ["Allowed"])
+
+
+class BatchSearchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_batch_preserves_order_and_returns_sibling_failure(self) -> None:
+        good = [SearchResult(1, "Good", "https://sec.gov/report", "body")]
+        with patch.object(
+            web_search_service,
+            "_backend_attempt_plan",
+            side_effect=lambda config, query, limit: [
+                ("first", lambda: (_ for _ in ()).throw(SearchBackendBlocked("blocked")))
+                if query == "bad"
+                else ("first", lambda: good)
+            ],
+        ):
+            responses = await search_batch_with_metadata(
+                [{"query": "bad", "domains": []}, {"query": "good", "domains": ["SEC.GOV"]}],
+                limit=10,
+                config={"blocked_domains": []},
+                concurrency=2,
+            )
+        self.assertEqual([item.status for item in responses], ["error", "ok"])
+        self.assertEqual(responses[1].results[0].url, "https://sec.gov/report")
+        self.assertEqual(responses[0].attempts[0]["state"], "blocked")
+
+    async def test_domain_filter_falls_through_after_zero_usable_results(self) -> None:
+        wrong = [SearchResult(1, "Wrong", "https://example.com/report", "body")]
+        right = [SearchResult(1, "Right", "https://www.sec.gov/report", "body")]
+        with patch.object(
+            web_search_service,
+            "_backend_attempt_plan",
+            return_value=[("one", lambda: wrong), ("two", lambda: right)],
+        ):
+            response = (await search_batch_with_metadata(
+                [{"query": "filing", "domains": ["sec.gov"]}], limit=10,
+                config={"blocked_domains": []}, concurrency=1,
+            ))[0]
+        self.assertEqual([attempt["result_count"] for attempt in response.attempts], [0, 1])
+        self.assertEqual(response.results[0].url, "https://www.sec.gov/report")
 
 
 class SearXNGBackendTests(unittest.TestCase):

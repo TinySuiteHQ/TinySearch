@@ -160,7 +160,7 @@ MCP_INSTRUCTIONS = """
 This MCP server exposes four tools:
 
 1. get_current_datetime()
-2. search(query)
+2. search(items)
 3. research(query)
 4. scrape_urls(items)
 
@@ -173,10 +173,11 @@ correct spelling, expand abbreviations, add relevant temporal context, translate
 or narrow the request when useful. Preserve important names, constraints,
 qualifiers, negations, and the user's underlying intent.
 
-Use search first for fast top-level discovery. It returns the configured
-backend's results in backend order with titles, URLs, previews, and upstream
-publication dates when available. It does not embed, rerank, crawl, or ground
-the results.
+Use search first for fast top-level discovery. Use one item for a simple
+lookup; combine independent subquestions or source strategies in one call.
+Use domains only for hard source restrictions. It returns backend-ordered
+titles, URLs, previews, dates, and compact backend outcomes; it does not
+embed, rerank, crawl, or ground the results.
 
 The research tool is deprecated. Use search instead.
 
@@ -241,43 +242,26 @@ async def get_current_datetime_tool() -> str:
     name="search",
     title="Search",
     description=(
-        "Fast top-level discovery. Return backend-ordered web results with titles, "
-        "URLs, previews, and upstream dates when available. Does not crawl or rerank."
+        "Fast discovery for one to five independent items. Use one item for a simple "
+        "lookup, multiple only for independent subquestions, and domains for hard "
+        "source restrictions. Does not crawl or rerank."
     ),
 )
 async def search_tool(
-    query: Annotated[
-        str,
-        Field(
-            description=(
-                "A search query describing the information to find. Refine it for "
-                "effective retrieval while preserving names, constraints, and intent."
-            )
-        ),
+    items: Annotated[
+        list[dict[str, Any]],
+        Field(description="One to five items, each with query and optional positive domains."),
     ],
-) -> str:
+) -> dict[str, Any]:
     started = time.monotonic()
     config = load_tinysearch_config()
-    limit = config["search_max_results"]
-    _log(f"search called query={query!r} limit={limit}")
-    try:
-        result = await core.search(
-            query,
-            limit=limit,
-            config=config,
-        )
-    except Exception as exc:
-        elapsed = time.monotonic() - started
-        _log(f"search failed elapsed={elapsed:.2f}s error={exc!r}")
-        raise ValueError(f"search_backend_error: {exc}") from exc
-    from tinysearch.services.grounded_prompt_service import format_search_results
-
-    answer = format_search_results(query=result["query"], results=result["results"])
+    _log(f"search called items={len(items)}")
+    result = await core.search(items, config=config)
     _log(
-        f"search returning results={result['stats']['result_count']} "
-        f"backend={result['backend']!r} elapsed={time.monotonic() - started:.2f}s"
+        f"search returning items={result['stats']['search_item_count']} "
+        f"attempts={result['stats']['backend_attempt_count']} elapsed={time.monotonic() - started:.2f}s"
     )
-    return answer
+    return result
 
 
 @mcp.tool(
@@ -327,7 +311,8 @@ async def research(
     description=(
         "Inspect one to five URL/query pairs. Each item has url and optional query; "
         "omit query or use '*' for page-order content, or provide a focused query "
-        "to rank chunks. Returns each item's success or error independently."
+        "describing needed evidence. Related links are navigation candidates; batch "
+        "URLs only after selecting them. Returns each item's success or error independently."
     ),
 )
 async def scrape_urls_tool(

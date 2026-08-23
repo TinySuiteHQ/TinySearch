@@ -23,6 +23,7 @@ from tinysearch.services.url_safety_service import (
 
 DEFAULT_SCRAPE_MAX_TOKENS = 4000
 DEFAULT_SCRAPE_MAX_LINKS = 8
+DEFAULT_SCRAPE_MAX_LINK_TOKENS = 500
 
 
 class ScrapeError(Exception):
@@ -66,6 +67,7 @@ class ScrapeResult:
     retrieved_at: str
     metadata: dict[str, str | None] | None = None
     links: list[dict[str, Any]] = field(default_factory=list)
+    link_tokens: int = 0
 
     def to_response(self, *, include_metadata: bool) -> dict[str, Any]:
         payload = asdict(self)

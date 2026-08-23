@@ -168,7 +168,7 @@ Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 
 | Tool | Use it when |
 | --- | --- |
-| `search(query)` | You need fast, backend-ordered discovery without crawling or reranking |
+| `search(items)` | You need fast, backend-ordered discovery without crawling or reranking; batch independent subquestions when useful |
 | `scrape_urls(items)` | You know one to five pages; each item may use `*` for its configured clean page-order token budget |
 | `get_current_datetime()` | A question depends on the current date or time |
 | `research(query)` | Legacy compatibility only; deprecated in favor of `search` followed by scraping |
@@ -185,25 +185,18 @@ TinySearch does not spend another model call writing the final answer. The
 recommended flow is `search` for lightweight discovery, then `scrape_urls` for
 the pages worth reading.
 
-Successful MCP tool-result text is XML. A search result looks like this:
+Search returns structured JSON. Use one item for a simple lookup; add multiple
+items only for independent subquestions or source strategies. `domains` is a
+hard positive source restriction and accepts a domain plus its subdomains:
 
-```xml
-<search_results>
-  <query>Python asyncio cancellation</query>
-  <results>
-    <result index="1">
-      <title>Coroutines and Tasks</title>
-      <url>https://docs.python.org/3/library/asyncio-task.html</url>
-      <search_preview>Tasks can be cancelled...</search_preview>
-    </result>
-  </results>
-</search_results>
+```json
+{"items":[{"query":"Form 8-K Tesla","domains":["sec.gov"]}]}
 ```
 
-`scrape_urls` returns each page's selected Markdown chunks under one
-`<url_grounded_answers>` batch root, and `get_current_datetime` returns
-`<current_datetime>`. Dynamic values are escaped so retrieved content cannot
-forge the XML boundaries around it.
+Each search item reports its own results and compact backend attempts. A zero
+result response is distinct from a blocked, unavailable, or invalid backend.
+`scrape_urls` returns selected Markdown evidence and separate related-link
+navigation candidates, each with independent configured token ceilings.
 
 MCP still uses its standard JSON-RPC transport envelope, including
 protocol-level errors and optional `structuredContent`. Python and FastAPI keep
@@ -212,8 +205,8 @@ or transform the evidence.
 
 ## How it works
 
-1. `search` returns backend-ordered titles, URLs, previews, and upstream dates
-   without starting Chromium or an embedding model.
+1. `search` returns backend-ordered titles, URLs, previews, upstream dates, and
+   backend outcomes without starting Chromium or an embedding model.
 2. `scrape_urls` reads one to five known pages concurrently. Omit an item's
    query or use `"*"` to keep clean Markdown in page order within the
    configured token budget.
@@ -238,10 +231,10 @@ from tinysearch import scrape_urls, search
 
 
 async def main():
-    results = await search("Python async tasks")
-    print(results["results"])
+    results = await search([{"query": "Python async tasks"}])
+    print(results["items"][0]["results"])
 
-    page_url = results["results"][0]["url"]
+    page_url = results["items"][0]["results"][0]["url"]
     evidence = await scrape_urls([{
         "url": page_url,
         "query": "How does asyncio cancellation work?",
@@ -252,15 +245,15 @@ async def main():
 asyncio.run(main())
 ```
 
-The Python API returns stable, JSON-serializable results. `search` accepts a
-per-call `limit` from 1 to 50. `scrape_urls` accepts a per-call `max_tokens`
+The Python API returns stable, JSON-serializable results. `search` accepts one
+to five items and uses the configured per-item result limit. `scrape_urls` accepts a per-call `max_tokens`
 budget (4,000 by default); omit an item's scrape query or use `"*"` for
 page-order mode. Rendering structured evidence into an LLM prompt is explicit,
 so applications can store, inspect, transform, or budget the result first.
 
-The optional FastAPI app mirrors these surfaces. `POST /search` and
-`POST /research` accept `output_format` (`prompt` or `json`) and always respond
-with JSON; prompt mode places rendered text in the `answer` field.
+The optional FastAPI app mirrors these surfaces. `POST /search` accepts the
+same batch JSON contract; `POST /research` retains its `output_format`
+(`prompt` or `json`) option.
 `POST /scrape` accepts one to five `{ "url", "query" }` items and always
 returns structured per-item outcomes.
 The app also exposes `/health`, `/current_datetime`, and read-only `/config`;
