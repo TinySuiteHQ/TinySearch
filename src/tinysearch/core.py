@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import Any
@@ -25,9 +26,8 @@ from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
 from tinysearch.services.site_crawl_service import create_browser_crawler, is_document_url
 from tinysearch.services.tinysearch_config_service import normalize_query
 from tinysearch.services.web_search_service import (
-    filter_blocked_search_results,
     search as web_search,
-    search_with_metadata,
+    search_batch_with_metadata,
 )
 
 get_current_datetime = current_datetime_payload
@@ -62,43 +62,54 @@ async def _ensure_browser_bundle(config: Mapping[str, Any]) -> None:
 
 
 async def search(
-    query: str,
+    items: Sequence[Mapping[str, Any]],
     *,
-    limit: int = 10,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
-    """Return raw, backend-ordered discovery results without deep research work."""
-    query = normalize_query(query)
-    if not 1 <= limit <= 50:
-        raise ValueError("limit must be between 1 and 50")
+    """Return independent, backend-ordered discovery results for 1--5 items."""
+    if not 1 <= len(items) <= 5:
+        raise ValueError("items must contain between 1 and 5 search items")
+    normalized = []
+    for item in items:
+        query = item.get("query")
+        domains = item.get("domains", [])
+        if domains is None:
+            domains = []
+        normalized.append({"query": query, "domains": domains})
     resolved_config = _resolve_config(config)
-    response = search_with_metadata(query, limit, config=resolved_config)
-    results = filter_blocked_search_results(
-        [
-            result
-            for result in response.results
-            if result.url.lower().startswith(("http://", "https://"))
-        ],
-        resolved_config["blocked_domains"],
+    started = time.monotonic()
+    responses = await search_batch_with_metadata(
+        normalized,
+        limit=int(resolved_config["search_max_results"]),
+        config=resolved_config,
+        concurrency=int(resolved_config["search_max_concurrent_items"]),
     )
+    output_items = []
+    for item, response in zip(normalized, responses, strict=True):
+        output_items.append({
+            "query": item["query"] if isinstance(item["query"], str) else "",
+            "domains": response.domains,
+            "status": response.status,
+            "results": [
+                {"rank": rank, "title": result.title, "url": result.url,
+                 "preview": result.text, "published_at": result.published_at}
+                for rank, result in enumerate(response.results, start=1)
+            ],
+            "backend_attempts": response.attempts,
+            "error": response.error,
+            "stats": {"result_count": len(response.results), "latency_ms": response.latency_ms},
+        })
     return {
         "schema_version": "1",
-        "operation": "search",
-        "status": "ok",
-        "query": query,
-        "backend": response.backend,
-        "results": [
-            {
-                "rank": rank,
-                "title": result.title,
-                "url": result.url,
-                "preview": result.text,
-                "published_at": result.published_at,
-            }
-            for rank, result in enumerate(results, start=1)
-        ],
+        "operation": "search_batch",
+        "status": "partial" if any(item["status"] == "error" for item in output_items) else "ok",
+        "items": output_items,
         "errors": [],
-        "stats": {"result_count": len(results)},
+        "stats": {
+            "search_item_count": len(output_items),
+            "backend_attempt_count": sum(len(item["backend_attempts"]) for item in output_items),
+            "latency_ms": round((time.monotonic() - started) * 1000),
+        },
     }
 
 
@@ -129,6 +140,7 @@ async def _scrape_url_with_config(
     config: dict[str, Any],
     crawler: Any | None,
 ) -> dict[str, Any]:
+    started = time.monotonic()
     scrape_result = await run_scrape_pipeline(
         url,
         query,
@@ -158,8 +170,12 @@ async def _scrape_url_with_config(
         retrieved_at=scrape_result.retrieved_at,
         sources=[source],
         stats={
+            "requested_url": url,
             "content_tokens": scrape_result.content_tokens,
+            "related_link_tokens": getattr(scrape_result, "link_tokens", 0),
             "truncated": scrape_result.truncated,
+            "browser_used": not is_document_url(url),
+            "latency_ms": round((time.monotonic() - started) * 1000),
         },
     )
 

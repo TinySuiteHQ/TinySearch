@@ -142,6 +142,24 @@ async def _select_top_links(
     ]
 
 
+def _links_under_budget(
+    links: list[dict[str, Any]], *, max_tokens: int, tokenizer_name: str
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep complete related links while their independent payload budget permits."""
+    selected: list[dict[str, Any]] = []
+    total = 0
+    for link in links:
+        # Count exactly the public fields the caller receives, with a small,
+        # stable label cost so budget behavior does not depend on JSON spacing.
+        text = f"URL: {link['url']}\nText: {link['text']}"
+        cost = len(encode_tokens(text, tokenizer_name))
+        if total + cost > max_tokens:
+            continue
+        selected.append(link)
+        total += cost
+    return selected, total
+
+
 async def run_scrape_pipeline(
     url: str,
     query: str | None,
@@ -251,6 +269,11 @@ async def run_scrape_pipeline(
             embedder=None,
             resolved=resolved,
         )
+        links, link_tokens = _links_under_budget(
+            links,
+            max_tokens=int(resolved["scrape_max_link_tokens"]),
+            tokenizer_name=tokenizer_name,
+        )
         return ScrapeResult(
             url=final_url,
             title=title,
@@ -261,6 +284,7 @@ async def run_scrape_pipeline(
             retrieved_at=utc_iso8601_z(),
             metadata=metadata,
             links=links,
+            link_tokens=link_tokens,
         )
 
     chunks = chunk_text(
@@ -288,6 +312,11 @@ async def run_scrape_pipeline(
         max_links=int(resolved["scrape_max_links"]),
         embedder=embedder,
         resolved=resolved,
+    )
+    links, link_tokens = _links_under_budget(
+        links,
+        max_tokens=int(resolved["scrape_max_link_tokens"]),
+        tokenizer_name=tokenizer_name,
     )
     ranked = await rank_chunks_hybrid(
         cleaned_query,
@@ -335,4 +364,5 @@ async def run_scrape_pipeline(
         retrieved_at=utc_iso8601_z(),
         metadata=metadata,
         links=links,
+        link_tokens=link_tokens,
     )

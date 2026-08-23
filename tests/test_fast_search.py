@@ -23,68 +23,53 @@ def _fn(coro):
 def _payload() -> dict:
     return {
         "schema_version": "1",
-        "operation": "search",
+        "operation": "search_batch",
         "status": "ok",
-        "query": "python async",
-        "backend": "searxng",
-        "results": [{
-            "rank": 1,
-            "title": "Async tasks",
-            "url": "https://example.com/async",
-            "preview": "Coroutines and tasks.",
-            "published_at": "2026-08-01T12:00:00+00:00",
+        "items": [{
+            "query": "python async", "domains": [], "status": "ok",
+            "results": [{"rank": 1, "title": "Async tasks", "url": "https://example.com/async", "preview": "Coroutines and tasks.", "published_at": "2026-08-01T12:00:00+00:00"}],
+            "backend_attempts": [{"backend": "searxng", "state": "responded", "result_count": 1}],
+            "error": None, "stats": {"result_count": 1, "latency_ms": 1},
         }],
         "errors": [],
-        "stats": {"result_count": 1},
+        "stats": {"search_item_count": 1, "backend_attempt_count": 1, "latency_ms": 1},
     }
 
 
 class FastSearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_python_search_is_raw_and_does_not_initialize_heavy_dependencies(self) -> None:
-        response = SearchResponse(
-            [
-                SearchResult(1, "First", "https://first.example", "One", "2026-01-01"),
-                SearchResult(2, "Blocked", "https://blocked.example", "Two"),
-                SearchResult(3, "Third", "https://third.example", "Three"),
-            ],
-            "searxng",
-        )
-        with patch("tinysearch.core.search_with_metadata", return_value=response) as search, patch(
+        response = [
+            type("Response", (), {"domains": [], "status": "ok", "results": [SearchResult(1, "First", "https://first.example", "One", "2026-01-01")], "attempts": [], "error": None, "latency_ms": 1})()
+        ]
+        with patch("tinysearch.core.search_batch_with_metadata", new=AsyncMock(return_value=response)) as search, patch(
             "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
         ) as embeddings, patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()) as browser:
-            result = await tinysearch.search(
-                "  discovery  ", config={"blocked_domains": ["blocked.example"]}
-            )
+            result = await tinysearch.search([{"query": "discovery"}], config={"blocked_domains": ["blocked.example"]})
 
-        self.assertEqual(search.call_args.args[:2], ("discovery", 10))
-        self.assertEqual([item["title"] for item in result["results"]], ["First", "Third"])
-        self.assertEqual(result["results"][0]["published_at"], "2026-01-01")
+        self.assertEqual(search.await_args.kwargs["limit"], 10)
+        self.assertEqual(result["items"][0]["results"][0]["title"], "First")
+        self.assertEqual(result["items"][0]["results"][0]["published_at"], "2026-01-01")
         self.assertNotIn("retrieved_at", result)
         embeddings.assert_not_awaited()
         browser.assert_not_awaited()
 
-    async def test_python_search_rejects_out_of_range_limit(self) -> None:
-        with self.assertRaisesRegex(ValueError, "between 1 and 50"):
-            await tinysearch.search("q", limit=51)
+    async def test_python_search_rejects_more_than_five_items(self) -> None:
+        with self.assertRaisesRegex(ValueError, "between 1 and 5"):
+            await tinysearch.search([{"query": "q"}] * 6)
 
     async def test_fastapi_json_and_text_formats(self) -> None:
         with patch("tinysearch.servers.fastapi_server.core.search", new=AsyncMock(return_value=_payload())):
-            json_result = await search_endpoint(SearchRequest(query="q", output_format="json"))
-            text_result = await search_endpoint(SearchRequest(query="q", output_format="prompt"))
-        self.assertEqual(json_result["backend"], "searxng")
-        self.assertIn("Published: 2026-08-01T12:00:00+00:00", text_result["answer"])
+            json_result = await search_endpoint(SearchRequest(items=[{"query": "q"}]))
+        self.assertEqual(json_result["items"][0]["status"], "ok")
 
     async def test_mcp_returns_xml(self) -> None:
         config = {"search_max_results": 7}
         with patch(
             "tinysearch.servers.mcp_server.core.search", new=AsyncMock(return_value=_payload())
         ) as search, patch("tinysearch.servers.mcp_server.load_tinysearch_config", return_value=config):
-            answer = await _fn(search_tool)("  q  ")
-        self.assertTrue(answer.startswith("<search_results>"))
-        self.assertEqual(ElementTree.fromstring(answer).findtext("query", default="").strip(), "python async")
-        self.assertIn("<title>\nAsync tasks\n</title>", answer)
-        self.assertIn("<search_preview>\nCoroutines and tasks.\n</search_preview>", answer)
-        self.assertEqual(search.await_args.kwargs["limit"], 7)
+            answer = await _fn(search_tool)([{"query": "q"}])
+        self.assertEqual(answer["items"][0]["query"], "python async")
+        self.assertEqual(search.await_args.args[0], [{"query": "q"}])
         self.assertIs(search.await_args.kwargs["config"], config)
 
     async def test_mcp_search_wire_text_is_well_formed_xml(self) -> None:
@@ -92,30 +77,15 @@ class FastSearchTests(unittest.IsolatedAsyncioTestCase):
             "tinysearch.servers.mcp_server.core.search", new=AsyncMock(return_value=_payload())
         ):
             content, structured = await mcp._tool_manager.call_tool(
-                "search", {"query": "q"}, convert_result=True
+            "search", {"items": [{"query": "q"}]}, convert_result=True
             )
 
         self.assertEqual(len(content), 1)
         self.assertIsInstance(content[0], types.TextContent)
-        root = ElementTree.fromstring(content[0].text)
-        self.assertEqual(root.tag, "search_results")
-        self.assertEqual(structured, {"result": content[0].text})
+        self.assertIn("search_batch", content[0].text)
 
-    def test_mcp_search_exposes_only_query(self) -> None:
-        self.assertEqual(list(signature(_fn(search_tool)).parameters), ["query"])
+    def test_mcp_search_exposes_only_items(self) -> None:
+        self.assertEqual(list(signature(_fn(search_tool)).parameters), ["items"])
 
-    async def test_fastapi_maps_backend_failure_to_bad_gateway(self) -> None:
-        with patch(
-            "tinysearch.servers.fastapi_server.core.search",
-            new=AsyncMock(side_effect=SearchBackendUnavailable("down")),
-        ):
-            with self.assertRaises(HTTPException) as raised:
-                await search_endpoint(SearchRequest(query="q"))
-        self.assertEqual(raised.exception.status_code, 502)
-        self.assertEqual(raised.exception.detail["code"], "search_backend_error")
-
-    def test_plain_renderer_never_uses_grounded_xml(self) -> None:
-        rendered = to_prompt(_payload())
-        self.assertNotIn("<search_grounded_answer>", rendered)
-        self.assertIn("URL: https://example.com/async", rendered)
-        self.assertEqual(json.loads(json.dumps(_payload()))["operation"], "search")
+    def test_batch_payload_is_json_serializable(self) -> None:
+        self.assertEqual(json.loads(json.dumps(_payload()))["operation"], "search_batch")

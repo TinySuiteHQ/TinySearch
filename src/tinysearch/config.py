@@ -25,8 +25,10 @@ from tinysearch.services.web_search_service import (
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "search_max_results": 10,
+    "search_max_concurrent_items": 3,
     "scrape_max_tokens": 2000,
     "scrape_max_links": 8,
+    "scrape_max_link_tokens": 500,
     "search_top_k": 10,
     "search_rrf_cutoff": 0.0,
     "search_dense_weight": 0.5,
@@ -76,8 +78,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 _INT_FIELDS = {
     "search_max_results",
+    "search_max_concurrent_items",
     "scrape_max_tokens",
     "scrape_max_links",
+    "scrape_max_link_tokens",
     "search_top_k",
     "search_max_results_to_keep",
     "chunk_max_results_to_keep",
@@ -127,6 +131,9 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         config.pop(legacy, None)
     for key in _INT_FIELDS:
         config[key] = int(config[key])
+    for key in ("search_max_concurrent_items", "scrape_max_link_tokens"):
+        if config[key] <= 0:
+            raise ValueError(f"tinysearch config {key} must be positive")
     for key in _FLOAT_FIELDS:
         config[key] = float(config[key])
     raw_timeout = config.get("pipeline_timeout_seconds")

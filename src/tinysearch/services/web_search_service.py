@@ -56,6 +56,14 @@ class SearchResponse:
     backend: str
 
 
+class BackendResults(list[SearchResult]):
+    """List-compatible backend results with a compact partial-outage signal."""
+
+    def __init__(self, values: Iterable[SearchResult], *, degraded: bool = False) -> None:
+        super().__init__(values)
+        self.degraded = degraded
+
+
 class SearchBackendError(Exception):
     """Base error raised when a search backend fails to produce results."""
 
@@ -66,6 +74,29 @@ class SearchBackendUnavailable(SearchBackendError):
 
 class SearchBackendBlocked(SearchBackendError):
     """Backend rejected the request (HTTP 403/429 or CAPTCHA/challenge page)."""
+
+
+def normalize_domains(values: Sequence[str]) -> list[str]:
+    """Validate a positive domain allowlist without broadening malformed input."""
+    normalized = [normalize_domain(value) for value in values]
+    if any(not value for value in normalized):
+        raise ValueError("search item domains must contain valid domains")
+    return list(dict.fromkeys(normalized))
+
+
+def matches_domain(url: str, domains: Sequence[str]) -> bool:
+    if not domains:
+        return True
+    host = normalize_domain(url)
+    return bool(host) and any(host == domain or host.endswith(f".{domain}") for domain in domains)
+
+
+def _restricted_query(query: str, domains: Sequence[str]) -> str:
+    """Use the portable `site:` operator where ordinary web backends support it."""
+    if not domains:
+        return query
+    clauses = [f"site:{domain}" for domain in domains]
+    return f"{query} ({' OR '.join(clauses)})"
 
 
 ALLOWED_SEARCH_BACKENDS: frozenset[str] = frozenset(
@@ -441,8 +472,8 @@ def _searxng_search(
         if len(out) >= limit:
             break
 
+    unresponsive = _unresponsive_engine_names(payload)
     if not out:
-        unresponsive = _unresponsive_engine_names(payload)
         if unresponsive:
             # SearXNG answers 200 with an empty result set when its engines are
             # rate-limited, CAPTCHA-challenged, or suspended; the failure shows
@@ -455,7 +486,7 @@ def _searxng_search(
                 + ", ".join(unresponsive)
             )
 
-    return out
+    return BackendResults(out, degraded=bool(unresponsive))
 
 
 def _load_search_config() -> dict[str, Any]:
@@ -581,6 +612,118 @@ def search_with_metadata(
     """Run a search and report the backend that supplied its results."""
     resolved_config = _load_search_config() if config is None else config
     return _dispatch_search_with_metadata(query, limit, config=resolved_config)
+
+
+def _attempt_state(exc: SearchBackendError) -> str:
+    if isinstance(exc, SearchBackendBlocked):
+        return "blocked"
+    message = str(exc).lower()
+    if any(marker in message for marker in ("malformed", "did not return json", "was not a list", "was not an object")):
+        return "invalid_response"
+    return "unavailable"
+
+
+def _backend_attempt_plan(
+    config: dict[str, Any], query: str, limit: int
+) -> list[tuple[str, Callable[[], list[SearchResult]]]]:
+    """Build the existing configured route as explicit, one-shot backend attempts."""
+    backend = str(config.get("search_backend") or "searxng").strip().lower()
+    url = str(config.get("search_backend_url") or DEFAULT_SEARXNG_URL)
+    engines = config.get("search_engines")
+    region = str(config.get("search_region") or config.get("search_country") or "") or None
+    ddgs_backend = str(config.get("ddgs_backend") or DEFAULT_DDGS_BACKEND)
+    ddgs_timeout = float(config.get("ddgs_timeout_seconds") or _DEFAULT_DDGS_TIMEOUT)
+    searxng = lambda: _searxng_search(query, limit, url=url, engines=engines, region=region)
+    ddgs = lambda: _ddgs_search(query, limit, region=region, backend=ddgs_backend, timeout=ddgs_timeout)
+    duckduckgo = lambda: _ddgs_search(query, limit, region=region, backend="duckduckgo", timeout=ddgs_timeout)
+    brave_key = _read_brave_api_key()
+    brave = (lambda: _brave_search(query, limit, api_key=brave_key)) if brave_key else None
+
+    if backend == "ddgs":
+        return [("ddgs", ddgs)] + ([("brave", brave)] if brave else [])
+    if backend == "duckduckgo":
+        return [("duckduckgo", duckduckgo)] + ([("brave", brave)] if brave else [])
+    if backend == "auto":
+        return [("searxng", searxng), ("duckduckgo", duckduckgo)]
+    attempts: list[tuple[str, Callable[[], list[SearchResult]]]] = [("searxng", searxng)]
+    if bool(config.get("search_backend_fallback", True)):
+        attempts.append(("duckduckgo", duckduckgo))
+        if brave:
+            attempts.append(("brave", brave))
+    return attempts
+
+
+@dataclass(frozen=True)
+class BatchSearchResponse:
+    results: list[SearchResult]
+    domains: list[str]
+    status: str
+    attempts: list[dict[str, Any]]
+    error: dict[str, str] | None
+    latency_ms: int
+
+
+async def search_batch_with_metadata(
+    items: Sequence[dict[str, Any]],
+    *,
+    limit: int,
+    config: dict[str, Any],
+    concurrency: int,
+) -> list[BatchSearchResponse]:
+    """Run isolated search items concurrently while retaining caller order."""
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+
+    async def run_item(item: dict[str, Any]) -> BatchSearchResponse:
+        async with semaphore:
+            started = asyncio.get_running_loop().time()
+            try:
+                query = str(item["query"]).strip() if isinstance(item.get("query"), str) else ""
+                if not query:
+                    raise ValueError("every search item requires a non-empty query string")
+                raw_domains = item.get("domains", [])
+                if not isinstance(raw_domains, list) or not all(isinstance(domain, str) for domain in raw_domains):
+                    raise ValueError("search item domains must be a list of strings")
+                domains = normalize_domains(raw_domains)
+            except ValueError as exc:
+                return BatchSearchResponse([], [], "error", [], {"code": "invalid_request", "message": str(exc)}, round((asyncio.get_running_loop().time() - started) * 1000))
+            attempts: list[dict[str, Any]] = []
+            constrained_query = _restricted_query(query, domains)
+            for backend, call in _backend_attempt_plan(config, constrained_query, limit):
+                attempt_started = asyncio.get_running_loop().time()
+                try:
+                    raw_results = await asyncio.to_thread(call)
+                    filtered = [
+                        result for result in raw_results
+                        if result.url.lower().startswith(("http://", "https://"))
+                        and not is_blocked_domain(result.url, config["blocked_domains"])
+                        and matches_domain(result.url, domains)
+                    ]
+                    state = "degraded" if getattr(raw_results, "degraded", False) else "responded"
+                    # SearXNG can return useful results while individual engines are
+                    # degraded. Its legacy list API does not expose that detail, so
+                    # retain the compact observable distinction when it does.
+                    attempts.append({
+                        "backend": backend,
+                        "state": state,
+                        "result_count": len(filtered),
+                        "latency_ms": round((asyncio.get_running_loop().time() - attempt_started) * 1000),
+                    })
+                    if filtered:
+                        return BatchSearchResponse(filtered, domains, "ok", attempts, None, round((asyncio.get_running_loop().time() - started) * 1000))
+                except SearchBackendError as exc:
+                    attempts.append({
+                        "backend": backend,
+                        "state": _attempt_state(exc),
+                        "result_count": 0,
+                        "reason": str(exc),
+                        "latency_ms": round((asyncio.get_running_loop().time() - attempt_started) * 1000),
+                    })
+            if attempts and all(attempt["state"] != "responded" for attempt in attempts):
+                last = attempts[-1]
+                return BatchSearchResponse([], domains, "error", attempts, {"code": last["state"], "message": str(last.get("reason") or "all search backends failed")}, round((asyncio.get_running_loop().time() - started) * 1000))
+            return BatchSearchResponse([], domains, "ok", attempts, None, round((asyncio.get_running_loop().time() - started) * 1000))
+
+    return await asyncio.gather(*(run_item(item) for item in items))
 
 
 def search_to_markdown(search_results: list[SearchResult]) -> str:

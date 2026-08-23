@@ -5,7 +5,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 from tinysearch import to_prompt
-from tinysearch.pipelines.scrape import run_scrape_pipeline
+from tinysearch.pipelines.scrape import _links_under_budget, run_scrape_pipeline
 from tinysearch.results import public_chunk, result_envelope
 from tinysearch.services.scrape_service import (
     DEFAULT_SCRAPE_MAX_TOKENS,
@@ -21,6 +21,20 @@ from tinysearch.services.url_safety_service import BlockedUrlError, InvalidUrlEr
 
 
 TOKENIZER = "o200k_base"
+
+
+class LinkBudgetTests(unittest.TestCase):
+    def test_link_budget_keeps_complete_links_and_is_independent(self) -> None:
+        links = [
+            {"url": "https://example.com/one", "text": "One", "score": 1.0},
+            {"url": "https://example.com/two", "text": "Two", "score": 0.9},
+        ]
+        selected, tokens = _links_under_budget(
+            links, max_tokens=25, tokenizer_name=TOKENIZER
+        )
+        self.assertLessEqual(tokens, 25)
+        self.assertTrue(selected)
+        self.assertTrue(all("url" in link and "text" in link for link in selected))
 
 
 async def _fake_embedder(inputs: list[str]) -> list[list[float]]:
