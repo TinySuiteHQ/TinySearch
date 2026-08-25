@@ -24,7 +24,7 @@
   ·
   <a href="#python-library">Python</a>
   ·
-  <a href="https://discord.gg/NG6u2zamR">Discord</a>
+  <a href="https://discord.gg/mFFKF9bf5e">Discord</a>
 </p>
 
 [![Website](https://img.shields.io/badge/tinysuite.dev-home-000000?logo=googlechrome&logoColor=white)](https://tinysuite.dev)
@@ -33,7 +33,7 @@
 [![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinySearch?label=release)](https://github.com/TinySuiteHQ/TinySearch/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/TinySuiteHQ/TinySearch)](https://github.com/TinySuiteHQ/TinySearch/commits/main)
 [![Docker Pulls](https://img.shields.io/docker/pulls/marcellm01/tinysearch?label=docker%20pulls)](https://hub.docker.com/r/marcellm01/tinysearch)
-[![Discord](https://img.shields.io/badge/Discord-Join%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/NG6u2zamR)
+[![Discord](https://img.shields.io/badge/Discord-Join%20community-5865F2?logo=discord&logoColor=white)](https://discord.gg/mFFKF9bf5e)
 ![MCP Server](https://img.shields.io/badge/MCP-server-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
@@ -426,7 +426,7 @@ across Linux, macOS, and Windows.
 
 Questions, ideas, and bug reports are welcome:
 
-- [Join the TinySearch Discord](https://discord.gg/NG6u2zamR)
+- [Join the TinySearch Discord](https://discord.gg/mFFKF9bf5e)
 - [Open a GitHub issue](https://github.com/TinySuiteHQ/TinySearch/issues)
 - [Email the maintainer](mailto:hello.marcbuilds@gmail.com)
 
