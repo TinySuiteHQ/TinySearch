@@ -61,21 +61,63 @@ async def _ensure_browser_bundle(config: Mapping[str, Any]) -> None:
     await asyncio.to_thread(ensure_chromium_sync)
 
 
-async def search(
-    items: Sequence[Mapping[str, Any]],
+def coerce_search_items(
+    items: Any = None,
     *,
+    query: str | None = None,
+    domains: Sequence[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Normalize the accepted search input shapes into a list of ``{"query", "domains"}``.
+
+    The preferred shape is a batch ``items`` list. For backward compatibility a
+    single item mapping, a bare query string, or a top-level ``query`` (with an
+    optional ``domains`` list) are also accepted and wrapped into a one-item
+    list. This is the single place both server adapters and the Python API funnel
+    through, so all callers share identical rules.
+    """
+    if items is not None:
+        if isinstance(items, str):
+            raw_items: list[Any] = [{"query": items}]
+        elif isinstance(items, Mapping):
+            raw_items = [items]
+        elif isinstance(items, Sequence):
+            raw_items = list(items)
+        else:
+            raise ValueError("items must be a list of search items")
+    elif query is not None:
+        raw_items = [{"query": query, "domains": list(domains) if domains else []}]
+    else:
+        raise ValueError("provide items (a list of 1 to 5 search items) or a query")
+
+    if not 1 <= len(raw_items) <= 5:
+        raise ValueError("items must contain between 1 and 5 search items")
+
+    normalized: list[dict[str, Any]] = []
+    for item in raw_items:
+        if isinstance(item, str):
+            item = {"query": item}
+        if not isinstance(item, Mapping):
+            raise ValueError("each search item must be a query string or an object")
+        item_domains = item.get("domains", [])
+        if item_domains is None:
+            item_domains = []
+        normalized.append({"query": item.get("query"), "domains": list(item_domains)})
+    return normalized
+
+
+async def search(
+    items: Any = None,
+    *,
+    query: str | None = None,
+    domains: Sequence[str] | None = None,
     config: ConfigInput | None = None,
 ) -> dict[str, Any]:
-    """Return independent, backend-ordered discovery results for 1--5 items."""
-    if not 1 <= len(items) <= 5:
-        raise ValueError("items must contain between 1 and 5 search items")
-    normalized = []
-    for item in items:
-        query = item.get("query")
-        domains = item.get("domains", [])
-        if domains is None:
-            domains = []
-        normalized.append({"query": query, "domains": domains})
+    """Return independent, backend-ordered discovery results for 1 to 5 items.
+
+    Accepts the preferred batch ``items`` list and, for backward compatibility,
+    a single ``query`` (with optional ``domains``); see ``coerce_search_items``.
+    """
+    normalized = coerce_search_items(items, query=query, domains=domains)
     resolved_config = _resolve_config(config)
     started = time.monotonic()
     responses = await search_batch_with_metadata(
