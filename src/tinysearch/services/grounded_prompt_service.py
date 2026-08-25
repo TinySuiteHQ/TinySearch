@@ -218,26 +218,48 @@ def format_current_datetime(*, date_utc: str, time_utc: str) -> str:
     ])
 
 
-def format_search_results(*, query: str, results: Sequence[dict[str, Any]]) -> str:
-    """Render lightweight discovery results in the MCP XML response contract."""
-    lines = ["<search_results>", "<query>", _xml_value(query.strip()), "</query>"]
-    if not results:
-        lines.append("<results />")
-    else:
-        lines.append("<results>")
-        for ordinal, result in enumerate(results, start=1):
+def format_search_batch_results(*, items: Sequence[dict[str, Any]]) -> str:
+    """Render a search batch in the MCP XML response contract.
+
+    Backend diagnostics (`backend_attempts`) are internal routing detail --
+    e.g. SearXNG reporting its own upstream engines as blocked even though the
+    caller only ever sees TinySearch's own separate ddgs/brave fallbacks --
+    and are deliberately left out of this caller-facing rendering.
+    """
+    lines = ["<search_results>"]
+    for ordinal, item in enumerate(items, start=1):
+        status = str(item.get("status") or "ok")
+        lines.append(f'<item index="{ordinal}" status="{status}">')
+        lines.extend(["<query>", _xml_value(str(item.get("query") or "").strip()), "</query>"])
+        domains = [str(domain) for domain in (item.get("domains") or []) if str(domain).strip()]
+        if domains:
+            lines.extend(["<domains>", _xml_value(", ".join(domains)), "</domains>"])
+        if status == "error":
+            error = item.get("error") if isinstance(item.get("error"), dict) else {}
             lines.extend([
-                f'<result index="{ordinal}">', "<title>",
-                _xml_value(str(result.get("title") or "").strip()), "</title>",
-                "<url>", _xml_value(str(result.get("url") or "").strip()), "</url>",
-                "<search_preview>", _xml_value(str(result.get("preview") or "").strip()),
-                "</search_preview>",
+                "<error>", _xml_value(str(error.get("message") or "Search failed.")), "</error>",
             ])
-            published_at = str(result.get("published_at") or "").strip()
-            if published_at:
-                lines.extend(["<published_at>", _xml_value(published_at), "</published_at>"])
-            lines.append("</result>")
-        lines.append("</results>")
+            lines.append("</item>")
+            continue
+        results = item.get("results") or []
+        if not results:
+            lines.append("<results />")
+        else:
+            lines.append("<results>")
+            for result_ordinal, result in enumerate(results, start=1):
+                lines.extend([
+                    f'<result index="{result_ordinal}">', "<title>",
+                    _xml_value(str(result.get("title") or "").strip()), "</title>",
+                    "<url>", _xml_value(str(result.get("url") or "").strip()), "</url>",
+                    "<search_preview>", _xml_value(str(result.get("preview") or "").strip()),
+                    "</search_preview>",
+                ])
+                published_at = str(result.get("published_at") or "").strip()
+                if published_at:
+                    lines.extend(["<published_at>", _xml_value(published_at), "</published_at>"])
+                lines.append("</result>")
+            lines.append("</results>")
+        lines.append("</item>")
     lines.append("</search_results>")
     return "\n".join(lines)
 

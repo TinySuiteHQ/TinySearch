@@ -68,7 +68,9 @@ class FastSearchTests(unittest.IsolatedAsyncioTestCase):
             "tinysearch.servers.mcp_server.core.search", new=AsyncMock(return_value=_payload())
         ) as search, patch("tinysearch.servers.mcp_server.load_tinysearch_config", return_value=config):
             answer = await _fn(search_tool)([{"query": "q"}])
-        self.assertEqual(answer["items"][0]["query"], "python async")
+        root = ElementTree.fromstring(answer)
+        self.assertEqual(root.find("./item/query").text.strip(), "python async")
+        self.assertNotIn("backend_attempts", answer)
         self.assertEqual(search.await_args.args[0], [{"query": "q"}])
         self.assertIs(search.await_args.kwargs["config"], config)
 
@@ -82,7 +84,8 @@ class FastSearchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(content), 1)
         self.assertIsInstance(content[0], types.TextContent)
-        self.assertIn("search_batch", content[0].text)
+        ElementTree.fromstring(content[0].text)
+        self.assertIn("<search_results>", content[0].text)
 
     def test_mcp_search_exposes_only_items(self) -> None:
         self.assertEqual(list(signature(_fn(search_tool)).parameters), ["items"])

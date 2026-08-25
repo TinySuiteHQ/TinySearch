@@ -252,7 +252,7 @@ async def search_tool(
         list[dict[str, Any]],
         Field(description="One to five items, each with query and optional positive domains."),
     ],
-) -> dict[str, Any]:
+) -> str:
     started = time.monotonic()
     config = load_tinysearch_config()
     _log(f"search called items={len(items)}")
@@ -261,7 +261,9 @@ async def search_tool(
         f"search returning items={result['stats']['search_item_count']} "
         f"attempts={result['stats']['backend_attempt_count']} elapsed={time.monotonic() - started:.2f}s"
     )
-    return result
+    from tinysearch.services.grounded_prompt_service import format_search_batch_results
+
+    return format_search_batch_results(items=result["items"])
 
 
 @mcp.tool(
