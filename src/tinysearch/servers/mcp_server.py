@@ -249,14 +249,25 @@ async def get_current_datetime_tool() -> str:
 )
 async def search_tool(
     items: Annotated[
-        list[dict[str, Any]],
+        list[dict[str, Any]] | None,
         Field(description="One to five items, each with query and optional positive domains."),
-    ],
+    ] = None,
+    query: Annotated[
+        str | None,
+        Field(description="Deprecated single-query compatibility; prefer items."),
+    ] = None,
+    domains: Annotated[
+        list[str] | None,
+        Field(description="Deprecated; positive domains for the single-query compatibility form."),
+    ] = None,
 ) -> str:
     started = time.monotonic()
     config = load_tinysearch_config()
-    _log(f"search called items={len(items)}")
-    result = await core.search(items, config=config)
+    if items is None and query is not None:
+        _log("search called with deprecated single-query shape; prefer items")
+    item_count = len(items) if items is not None else (1 if query is not None else 0)
+    _log(f"search called items={item_count}")
+    result = await core.search(items, query=query, domains=domains, config=config)
     _log(
         f"search returning items={result['stats']['search_item_count']} "
         f"attempts={result['stats']['backend_attempt_count']} elapsed={time.monotonic() - started:.2f}s"

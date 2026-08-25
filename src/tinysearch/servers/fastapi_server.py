@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 from tinysearch import core
 from tinysearch.services.tinysearch_config_service import (
@@ -48,17 +49,32 @@ class ResearchRequest(BaseModel):
     output_format: Literal["prompt", "json"] = "prompt"
 
 
-class SearchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    items: list["SearchItem"] = Field(..., min_length=1, max_length=5)
-
-
 class SearchItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     query: str = Field(..., min_length=1)
     domains: list[str] = Field(default_factory=list)
+
+
+class SearchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[SearchItem] | None = Field(default=None, min_length=1, max_length=5)
+    # Deprecated single-query compatibility fields; prefer items. Kept so callers
+    # written against the pre-batch /search contract do not break on upgrade.
+    query: str | None = Field(default=None, min_length=1)
+    domains: list[str] | None = None
+
+    @model_validator(mode="after")
+    def _coerce_single_query(self) -> "SearchRequest":
+        if self.items is None:
+            if self.query is None:
+                raise ValueError("provide items (1 to 5 search items) or a query")
+            self.items = [SearchItem(query=self.query, domains=self.domains or [])]
+        return self
+
+    def normalized_items(self) -> list[dict[str, Any]]:
+        return [item.model_dump() for item in self.items or []]
 
 
 @app.get("/health")
@@ -158,7 +174,13 @@ async def research_endpoint(request: ResearchRequest) -> dict[str, Any]:
 
 @app.post("/search")
 async def search_endpoint(request: SearchRequest) -> dict[str, Any]:
+    if request.query is not None:
+        print(
+            "[tinysearch] /search called with deprecated single-query shape; prefer items",
+            file=sys.stderr,
+            flush=True,
+        )
     return await core.search(
-        [item.model_dump() for item in request.items],
+        request.normalized_items(),
         config=load_tinysearch_config(),
     )
