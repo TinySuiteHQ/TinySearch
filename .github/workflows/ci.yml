@@ -43,7 +43,7 @@ jobs:
           python -c "import importlib.metadata as m; r=m.requires('tinysuite-search') or []; assert any(x.lower().startswith('opentelemetry-api') for x in r); assert not any(x.lower().startswith(('opentelemetry-sdk','opentelemetry-exporter-otlp')) and 'extra ==' not in x.lower() for x in r)"
 
       - name: Run core contract tests
-        run: python -m unittest tests.test_core tests.test_public_config_and_results tests.test_research_pipeline tests.test_scrape_pipeline tests.test_grounded_prompt_service
+        run: python -m unittest tests.test_core tests.test_public_config_and_results tests.test_scrape_pipeline tests.test_grounded_prompt_service
 
   platform-tests:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}

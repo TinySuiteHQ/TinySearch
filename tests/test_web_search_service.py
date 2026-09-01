@@ -22,7 +22,6 @@ from tinysearch.services.web_search_service import (
     _dispatch_search,
     _searxng_search,
     _with_brave_fallback,
-    filter_blocked_search_results,
     is_blocked_domain,
     normalize_domain,
     search,
@@ -158,16 +157,6 @@ class BlockedDomainTests(unittest.TestCase):
                 ["https://www.example.com/anything"],
             )
         )
-
-    def test_filter_blocked_search_results_keeps_allowed_results(self) -> None:
-        results = [
-            SearchResult(1, "Blocked", "https://blocked.example/page", "blocked"),
-            SearchResult(2, "Allowed", "https://allowed.example/page", "allowed"),
-        ]
-
-        filtered = filter_blocked_search_results(results, ["blocked.example"])
-
-        self.assertEqual([result.title for result in filtered], ["Allowed"])
 
 
 class BatchSearchTests(unittest.IsolatedAsyncioTestCase):

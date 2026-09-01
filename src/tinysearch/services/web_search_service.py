@@ -141,17 +141,6 @@ def is_blocked_domain(url: str, blocked_domains: Iterable[str]) -> bool:
     return False
 
 
-def filter_blocked_search_results(
-    search_results: list[SearchResult],
-    blocked_domains: Iterable[str],
-) -> list[SearchResult]:
-    return [
-        result
-        for result in search_results
-        if not is_blocked_domain(result.url, blocked_domains)
-    ]
-
-
 def _ddgs_search(
     query: str,
     limit: int,
@@ -621,7 +610,7 @@ def _dispatch_search(
     *,
     config: dict[str, Any],
 ) -> list[SearchResult]:
-    """Compatibility wrapper for the existing research pipeline."""
+    """Backward-compatible list-returning wrapper around the metadata dispatch."""
     return _dispatch_search_with_metadata(query, limit, config=config).results
 
 

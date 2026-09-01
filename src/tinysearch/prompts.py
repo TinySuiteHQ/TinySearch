@@ -6,10 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from tinysearch.results import SCHEMA_VERSION
-from tinysearch.services.grounded_prompt_service import (
-    format_search_grounded_prompt,
-    format_url_grounded_prompt,
-)
+from tinysearch.services.grounded_prompt_service import format_url_grounded_prompt
 
 
 def _legacy_source(source: Mapping[str, Any]) -> dict[str, Any]:
@@ -61,13 +58,6 @@ def to_prompt(result: Mapping[str, Any], *, today: str | None = None) -> str:
         if isinstance(raw_sources, list)
         else []
     )
-    if operation == "research":
-        return format_search_grounded_prompt(
-            question=question,
-            results=sources,
-            today=today,
-            retrieved_at=str(result.get("retrieved_at") or "") or None,
-        )
     if operation == "scrape":
         source = sources[0] if sources else {
             "title": "",

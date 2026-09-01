@@ -1,24 +1,15 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 from mcp.server.fastmcp.server import Settings as FastMCPSettings
 from tinysearch.core import _ensure_local_bundle_for_config
-from tinysearch.servers.fastapi_server import (
-    ResearchRequest,
-    _tinysearch_version,
-    research_endpoint,
-)
-from tinysearch.servers.mcp_server import _mcp_cors_origins, research as mcp_research
+from tinysearch.servers.fastapi_server import _tinysearch_version
+from tinysearch.servers.mcp_server import _mcp_cors_origins
 from tinysearch.services.tinysearch_config_service import (
     normalize_query,
 )
-from tinysearch.results import result_envelope
-
-
-def _fn(coro):
-    return getattr(coro, "fn", coro)
 
 
 class EmbeddingStartupTests(unittest.IsolatedAsyncioTestCase):
@@ -39,31 +30,6 @@ class EmbeddingStartupTests(unittest.IsolatedAsyncioTestCase):
             await _ensure_local_bundle_for_config(cfg)
 
         ensure.assert_not_called()
-
-
-class ResearchParityTests(unittest.IsolatedAsyncioTestCase):
-    """Both adapters delegate to the same `tinysearch.core.research`."""
-
-    async def test_research_uses_same_config_defaults_as_mcp(self) -> None:
-        result = result_envelope(
-            operation="research",
-            status="ok",
-            query="test query",
-            sources=[],
-        )
-        core_research = AsyncMock(return_value=result)
-        with patch("tinysearch.core.research", core_research):
-            fastapi_response = await research_endpoint(
-                ResearchRequest(query="  test query  ")
-            )
-            mcp_response = await _fn(mcp_research)("  test query  ")
-
-        self.assertEqual(fastapi_response["answer"], mcp_response)
-        self.assertIn("<search_grounded_answer", mcp_response)
-
-    async def test_research_rejects_whitespace_only_query(self) -> None:
-        with self.assertRaisesRegex(ValueError, "query must not be empty"):
-            await research_endpoint(ResearchRequest(query="   "))
 
 
 class ServerRuntimeMetadataTests(unittest.TestCase):

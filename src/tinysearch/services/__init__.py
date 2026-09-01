@@ -1,1 +1,1 @@
-"""Research service modules."""
+"""TinySearch service modules."""

@@ -7,19 +7,18 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import tinysearch
-from tinysearch.config import DEFAULT_CONFIG, TinySearchConfig
+from tinysearch.config import TinySearchConfig
 from tinysearch.core import (
     _ensure_browser_bundle,
     _ensure_local_bundle_for_config,
     scrape_urls,
 )
-from tinysearch.pipelines.research import ResearchResult
 from tinysearch.results import result_envelope
 
 
-def _research_payload(query: str = "hello") -> dict:
+def _result_payload(query: str = "hello") -> dict:
     return result_envelope(
-        operation="research",
+        operation="scrape",
         status="ok",
         query=query,
         sources=[],
@@ -31,55 +30,6 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(tinysearch.get_current_datetime, tinysearch.core.get_current_datetime)
         self.assertTrue(callable(tinysearch.to_prompt))
         self.assertEqual(TinySearchConfig()["search_backend"], "ddgs")
-
-    async def test_research_returns_json_serializable_schema_v1_result(self) -> None:
-        run = AsyncMock(return_value=ResearchResult(_research_payload()))
-        with patch("tinysearch.core.run_research_pipeline", new=run), patch(
-            "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
-        ), patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()
-        ):
-            result = await tinysearch.research("  hello  ")
-
-        self.assertEqual(result["schema_version"], "1")
-        self.assertEqual(result["operation"], "research")
-        self.assertEqual(result["query"], "hello")
-        json.dumps(result)
-        self.assertEqual(run.await_args.args[0], "hello")
-
-    async def test_research_explicit_config_controls_bound_search(self) -> None:
-        run = AsyncMock(return_value=ResearchResult(_research_payload()))
-        with patch("tinysearch.core.run_research_pipeline", new=run), patch(
-            "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
-        ), patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()
-        ):
-            await tinysearch.research(
-                "hello",
-                config={"search_backend": "searxng", "search_top_k": 3},
-            )
-
-        self.assertEqual(run.await_args.kwargs["config"]["search_top_k"], 3)
-        bound_search = run.await_args.kwargs["search_fn"]
-        self.assertEqual(bound_search.keywords["config"]["search_backend"], "searxng")
-
-    async def test_research_explicit_config_is_merged_onto_defaults(self) -> None:
-        run = AsyncMock(return_value=ResearchResult(_research_payload()))
-        with patch("tinysearch.core.run_research_pipeline", new=run), patch(
-            "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
-        ), patch("tinysearch.core._ensure_browser_bundle", new=AsyncMock()
-        ):
-            await tinysearch.research("hello", config={"search_region": "uk-en"})
-
-        self.assertEqual(
-            run.await_args.kwargs["config"]["search_top_k"],
-            DEFAULT_CONFIG["search_top_k"],
-        )
-
-    async def test_research_rejects_invalid_config(self) -> None:
-        with self.assertRaises(ValueError):
-            await tinysearch.research(
-                "hello",
-                config={"search_backend": "not-a-backend"},
-            )
 
     async def test_scrape_urls_returns_single_item_in_common_batch_shape(self) -> None:
         scrape_result = SimpleNamespace(
@@ -114,7 +64,7 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(hasattr(tinysearch, "scrape_url"))
 
     async def test_scrape_urls_returns_independent_partial_outcomes(self) -> None:
-        successful = _research_payload("*")
+        successful = _result_payload("*")
         successful["operation"] = "scrape"
         with patch(
             "tinysearch.core._scrape_url_with_config",

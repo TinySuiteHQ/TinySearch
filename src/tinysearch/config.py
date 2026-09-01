@@ -30,18 +30,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scrape_max_links": 8,
     "scrape_max_link_tokens": 500,
     "search_top_k": 10,
-    "search_rrf_cutoff": 0.0,
-    "search_dense_weight": 0.5,
-    "search_max_results_to_keep": 5,
     "chunk_rrf_cutoff": 0.0,
     "chunk_dense_weight": 0.5,
-    "chunk_max_results_to_keep": 2,
-    "chunk_rank_oversample": 3,
-    "chunk_dedupe_jaccard_threshold": 0.92,
-    "chunk_semantic_dedupe_enabled": True,
-    "chunk_semantic_dedupe_threshold": 0.92,
-    "chunk_max_per_source_url": 4,
-    "max_concurrent_crawls": 5,
     "max_concurrent_embedding_calls": 3,
     "pipeline_timeout_seconds": 120.0,
     "embedding_timeout_seconds": 60.0,
@@ -73,7 +63,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ddgs_timeout_seconds": 20.0,
     "ddgs_backend": "auto",
     "browser_cdp_url": "",
-    "trace_path": "",
 }
 
 _INT_FIELDS = {
@@ -83,11 +72,6 @@ _INT_FIELDS = {
     "scrape_max_links",
     "scrape_max_link_tokens",
     "search_top_k",
-    "search_max_results_to_keep",
-    "chunk_max_results_to_keep",
-    "chunk_rank_oversample",
-    "chunk_max_per_source_url",
-    "max_concurrent_crawls",
     "max_concurrent_embedding_calls",
     "embedding_timeout_retries",
     "crawl_fit_min_chars",
@@ -97,24 +81,13 @@ _INT_FIELDS = {
     "dense_document_embed_batch_size",
 }
 _FLOAT_FIELDS = {
-    "search_rrf_cutoff",
-    "search_dense_weight",
     "chunk_rrf_cutoff",
     "chunk_dense_weight",
-    "chunk_dedupe_jaccard_threshold",
-    "chunk_semantic_dedupe_threshold",
     "crawl_bm25_threshold",
     "crawl_pruning_threshold",
     "embedding_timeout_seconds",
     "ddgs_timeout_seconds",
 }
-
-
-def _coerce_bool(value: Any) -> bool:
-    """Coerce config values (including JSON strings like "false"/"0") to bool."""
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
 
 
 def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
@@ -150,7 +123,6 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "crawl_bm25_language",
         "ddgs_backend",
         "browser_cdp_url",
-        "trace_path",
     ):
         if config.get(key) is not None:
             config[key] = str(config[key])
@@ -222,9 +194,6 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     config.pop("search_country", None)
     config["search_backend_fallback"] = bool(
         config.get("search_backend_fallback", True)
-    )
-    config["chunk_semantic_dedupe_enabled"] = _coerce_bool(
-        config.get("chunk_semantic_dedupe_enabled", True)
     )
     return config
 

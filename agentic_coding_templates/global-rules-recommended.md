@@ -8,12 +8,9 @@ This environment uses the **TinySearch** MCP server.
 | --- | --- | --- | --- |
 | `get_current_datetime()` | Current UTC time for time-sensitive questions | None | UTC date and time |
 | `search(query)` | Web-wide discovery | A retrieval-focused query | Backend-ordered titles, URLs, previews, and dates when available |
-| `research(query)` | Legacy deep retrieval only | A retrieval-focused query | Search-grounded XML prompt |
 | `scrape_urls(items)` | One to five known pages | One to five `{ "url", "query"? }` items | Independent scrape outcomes |
 
-`research` is deprecated. Use `search` to find relevant URLs, then use
-`scrape_urls` to read them. Do not use `research` for new
-workflows unless maintaining a legacy integration.
+Use `search` to find relevant URLs, then use `scrape_urls` to read them.
 
 ---
 

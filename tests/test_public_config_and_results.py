@@ -122,7 +122,7 @@ class PublicConfigTests(unittest.TestCase):
 class PublicResultTests(unittest.TestCase):
     def test_prompt_renderer_is_deterministic(self) -> None:
         result = result_envelope(
-            operation="research",
+            operation="scrape",
             status="ok",
             query="What happened?",
             retrieved_at="2026-01-01T00:00:00Z",
@@ -147,7 +147,7 @@ class PublicResultTests(unittest.TestCase):
 
     def test_prompt_renderer_rejects_unknown_schema(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported"):
-            to_prompt({"schema_version": "2", "operation": "research"})
+            to_prompt({"schema_version": "2", "operation": "scrape"})
 
 
 if __name__ == "__main__":

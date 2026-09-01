@@ -12,9 +12,8 @@ inside the model's own context window, at the model's token price.
 
 TinySearch does that filtering locally, via the two tools it recommends
 agents actually use: `search` for fast backend-ordered discovery, then
-`scrape_urls` to fetch and hybrid-rerank the pages worth reading. (The
-older all-in-one `research` pipeline is deprecated in favor of that pair;
-this benchmark measures the current recommended path.)
+`scrape_urls` to fetch and hybrid-rerank the pages worth reading. This
+benchmark measures that recommended path.
 
 This script isolates *exactly that difference*. For each benchmark query it:
 

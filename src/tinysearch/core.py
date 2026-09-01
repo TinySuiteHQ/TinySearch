@@ -1,4 +1,4 @@
-"""The four operations TinySearch exposes, independent of transport.
+"""The operations TinySearch exposes, independent of transport.
 
 `servers/mcp_server.py` and `servers/fastapi_server.py` are thin adapters
 around these functions: they add transport-specific request/response schemas,
@@ -13,22 +13,16 @@ import asyncio
 import contextlib
 import time
 from collections.abc import Mapping, Sequence
-from functools import partial
 from typing import Any
 
 from tinysearch.config import ConfigInput, resolve_config
-from tinysearch.pipelines.research import run_research_pipeline
 from tinysearch.pipelines.scrape import run_scrape_pipeline
 from tinysearch.results import public_chunk, public_link, result_envelope
 from tinysearch.services.current_datetime_service import current_datetime_payload
 from tinysearch.services.embedding_service import normalize_embedding_backend
 from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
 from tinysearch.services.site_crawl_service import create_browser_crawler, is_document_url
-from tinysearch.services.tinysearch_config_service import normalize_query
-from tinysearch.services.web_search_service import (
-    search as web_search,
-    search_batch_with_metadata,
-)
+from tinysearch.services.web_search_service import search_batch_with_metadata
 from tinysearch.telemetry import span_scope
 
 get_current_datetime = current_datetime_payload
@@ -173,40 +167,6 @@ async def search(
                 "latency_ms": round((time.monotonic() - started) * 1000),
             },
         }
-
-
-async def research(query: str, *, config: ConfigInput | None = None) -> dict[str, Any]:
-    """Discover relevant URLs, crawl and rank them, and return structured evidence.
-
-    `config`, if given, overrides the on-disk/env-driven config for this call
-    only (see `_resolve_config`), pass a dict instead of pointing
-    `TINYSEARCH_CONFIG_PATH` at a file when calling this as a library.
-    """
-    with span_scope(
-        "tinysearch.research",
-        operation="research",
-        record_operation_metric=True,
-    ) as telemetry:
-        query = normalize_query(query)
-        resolved_config = _resolve_config(config)
-        await _ensure_local_bundle_for_config(resolved_config)
-        await _ensure_browser_bundle(resolved_config)
-        result = (
-            await run_research_pipeline(
-                query,
-                config=resolved_config,
-                search_fn=partial(web_search, config=resolved_config),
-            )
-        ).to_dict()
-        status = str(result.get("status") or "ok")
-        source_count = len(result.get("sources") or [])
-        telemetry.complete(
-            outcome=status,
-            result_count=source_count,
-            error_type=status if status in {"timeout", "search_backend_error", "partial"} else None,
-            attributes={"tinysearch.source.count": source_count},
-        )
-        return result
 
 
 async def _scrape_url_with_config(
