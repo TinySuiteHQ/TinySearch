@@ -13,6 +13,8 @@ from typing import Any
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from tinysearch.telemetry import backend_attempt_scope, span_scope
+
 
 @lru_cache(maxsize=1)
 def _ddgs_cls() -> Any:
@@ -503,7 +505,7 @@ def _load_search_config() -> dict[str, Any]:
     return load_tinysearch_config()
 
 
-def _dispatch_search_with_metadata(
+def _dispatch_search_with_metadata_uninstrumented(
     query: str,
     limit: int,
     *,
@@ -580,6 +582,37 @@ def _dispatch_search_with_metadata(
             limit,
             primary_backend="duckduckgo",
         )
+
+
+def _dispatch_search_with_metadata(
+    query: str,
+    limit: int,
+    *,
+    config: dict[str, Any],
+) -> SearchResponse:
+    """Run the legacy synchronous path under one logical backend span."""
+
+    configured_backend = str(config.get("search_backend") or "searxng").strip().lower()
+    with backend_attempt_scope(
+        backend=configured_backend if configured_backend in ALLOWED_SEARCH_BACKENDS else "searxng",
+        attempt=1,
+        fallback=False,
+    ) as telemetry:
+        try:
+            response = _dispatch_search_with_metadata_uninstrumented(
+                query,
+                limit,
+                config=config,
+            )
+        except SearchBackendError as exc:
+            telemetry.complete(outcome="error", error_type=type(exc).__name__)
+            raise
+        telemetry.complete(
+            outcome="degraded" if response.backend != configured_backend else "responded",
+            result_count=len(response.results),
+            attributes={"tinysearch.search.resolved_backend": response.backend},
+        )
+        return response
 
 
 def _dispatch_search(
@@ -682,56 +715,75 @@ async def search_batch_with_metadata(
 
     async def run_item(item: dict[str, Any]) -> BatchSearchResponse:
         async with semaphore:
-            started = asyncio.get_running_loop().time()
-            try:
-                query = str(item["query"]).strip() if isinstance(item.get("query"), str) else ""
-                if not query:
-                    raise ValueError("every search item requires a non-empty query string")
-                raw_domains = item.get("domains", [])
-                if not isinstance(raw_domains, list) or not all(isinstance(domain, str) for domain in raw_domains):
-                    raise ValueError("search item domains must be a list of strings")
-                domains = normalize_domains(raw_domains)
-            except ValueError as exc:
-                return BatchSearchResponse([], [], "error", [], {"code": "invalid_request", "message": str(exc)}, round((asyncio.get_running_loop().time() - started) * 1000))
-            attempts: list[dict[str, Any]] = []
-            constrained_query = _restricted_query(query, domains)
-            for backend, call in _backend_attempt_plan(config, constrained_query, limit):
-                attempt_started = asyncio.get_running_loop().time()
+            with span_scope("tinysearch.search.item", operation="search_item") as telemetry:
+                started = asyncio.get_running_loop().time()
                 try:
-                    raw_results = await asyncio.to_thread(call)
-                    filtered = [
-                        result for result in raw_results
-                        if result.url.lower().startswith(("http://", "https://"))
-                        and not is_blocked_domain(result.url, config["blocked_domains"])
-                        and matches_domain(result.url, domains)
-                    ]
-                    state = "degraded" if getattr(raw_results, "degraded", False) else "responded"
-                    # SearXNG can return useful results while individual engines are
-                    # degraded. Its legacy list API does not expose that detail, so
-                    # retain the compact observable distinction when it does.
-                    attempt: dict[str, Any] = {
-                        "backend": backend,
-                        "state": state,
-                        "result_count": len(filtered),
-                        "latency_ms": round((asyncio.get_running_loop().time() - attempt_started) * 1000),
-                    }
-                    if state == "degraded" and getattr(raw_results, "reason", ""):
-                        attempt["reason"] = raw_results.reason
-                    attempts.append(attempt)
-                    if filtered:
-                        return BatchSearchResponse(filtered, domains, "ok", attempts, None, round((asyncio.get_running_loop().time() - started) * 1000))
-                except SearchBackendError as exc:
-                    attempts.append({
-                        "backend": backend,
-                        "state": _attempt_state(exc),
-                        "result_count": 0,
-                        "reason": str(exc),
-                        "latency_ms": round((asyncio.get_running_loop().time() - attempt_started) * 1000),
-                    })
-            if attempts and all(attempt["state"] != "responded" for attempt in attempts):
-                last = attempts[-1]
-                return BatchSearchResponse([], domains, "error", attempts, {"code": last["state"], "message": str(last.get("reason") or "all search backends failed")}, round((asyncio.get_running_loop().time() - started) * 1000))
-            return BatchSearchResponse([], domains, "ok", attempts, None, round((asyncio.get_running_loop().time() - started) * 1000))
+                    query = str(item["query"]).strip() if isinstance(item.get("query"), str) else ""
+                    if not query:
+                        raise ValueError("every search item requires a non-empty query string")
+                    raw_domains = item.get("domains", [])
+                    if not isinstance(raw_domains, list) or not all(isinstance(domain, str) for domain in raw_domains):
+                        raise ValueError("search item domains must be a list of strings")
+                    domains = normalize_domains(raw_domains)
+                except ValueError as exc:
+                    telemetry.complete(outcome="error", error_type="invalid_request")
+                    return BatchSearchResponse([], [], "error", [], {"code": "invalid_request", "message": str(exc)}, round((asyncio.get_running_loop().time() - started) * 1000))
+                attempts: list[dict[str, Any]] = []
+                constrained_query = _restricted_query(query, domains)
+                for attempt_number, (backend, call) in enumerate(
+                    _backend_attempt_plan(config, constrained_query, limit), start=1
+                ):
+                    attempt_started = asyncio.get_running_loop().time()
+                    with backend_attempt_scope(
+                        backend=backend,
+                        attempt=attempt_number,
+                        fallback=attempt_number > 1,
+                    ) as attempt_telemetry:
+                        try:
+                            raw_results = await asyncio.to_thread(call)
+                            filtered = [
+                                result for result in raw_results
+                                if result.url.lower().startswith(("http://", "https://"))
+                                and not is_blocked_domain(result.url, config["blocked_domains"])
+                                and matches_domain(result.url, domains)
+                            ]
+                            state = "degraded" if getattr(raw_results, "degraded", False) else "responded"
+                            attempt_telemetry.complete(
+                                outcome=state,
+                                result_count=len(filtered),
+                                attributes={"tinysearch.result.count": len(filtered)},
+                            )
+                            # SearXNG can return useful results while individual engines are
+                            # degraded. Its legacy list API does not expose that detail, so
+                            # retain the compact observable distinction when it does.
+                            attempt: dict[str, Any] = {
+                                "backend": backend,
+                                "state": state,
+                                "result_count": len(filtered),
+                                "latency_ms": round((asyncio.get_running_loop().time() - attempt_started) * 1000),
+                            }
+                            if state == "degraded" and getattr(raw_results, "reason", ""):
+                                attempt["reason"] = raw_results.reason
+                            attempts.append(attempt)
+                            if filtered:
+                                telemetry.complete(result_count=len(filtered), attributes={"tinysearch.result.count": len(filtered)})
+                                return BatchSearchResponse(filtered, domains, "ok", attempts, None, round((asyncio.get_running_loop().time() - started) * 1000))
+                        except SearchBackendError as exc:
+                            state = _attempt_state(exc)
+                            attempt_telemetry.complete(outcome="error", error_type=type(exc).__name__)
+                            attempts.append({
+                                "backend": backend,
+                                "state": state,
+                                "result_count": 0,
+                                "reason": str(exc),
+                                "latency_ms": round((asyncio.get_running_loop().time() - attempt_started) * 1000),
+                            })
+                if attempts and all(attempt["state"] != "responded" for attempt in attempts):
+                    last = attempts[-1]
+                    telemetry.complete(outcome="error", error_type=str(last["state"]))
+                    return BatchSearchResponse([], domains, "error", attempts, {"code": last["state"], "message": str(last.get("reason") or "all search backends failed")}, round((asyncio.get_running_loop().time() - started) * 1000))
+                telemetry.complete(result_count=0)
+                return BatchSearchResponse([], domains, "ok", attempts, None, round((asyncio.get_running_loop().time() - started) * 1000))
 
     return await asyncio.gather(*(run_item(item) for item in items))
 

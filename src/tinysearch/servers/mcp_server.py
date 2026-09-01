@@ -19,6 +19,7 @@ from tinysearch.services.tinysearch_config_service import (
     tokenizer_name_for_config,
 )
 from tinysearch.services.token_counter_service import token_count
+from tinysearch.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
 # MCP 1.x defines its generic Settings model before FastMCP, leaving the
 # Settings.lifespan annotation as an unresolved forward reference. Rebuild it
@@ -349,18 +350,22 @@ async def scrape_urls_tool(
 
 def main() -> None:
     _enable_traceback_dump()
+    configure_from_environment()
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError(
             "MCP_TRANSPORT must be one of: stdio, sse, streamable-http "
             "(default stdio for IDE-spawned MCP; set env only for standalone HTTP/SSE)"
         )
-    if transport == "streamable-http":
-        import anyio
+    try:
+        if transport == "streamable-http":
+            import anyio
 
-        anyio.run(_run_streamable_http_combined_async)
-    else:
-        mcp.run(transport=transport)
+            anyio.run(_run_streamable_http_combined_async)
+        else:
+            mcp.run(transport=transport)
+    finally:
+        shutdown_telemetry()
 
 
 if __name__ == "__main__":

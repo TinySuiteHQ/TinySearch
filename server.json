@@ -46,6 +46,54 @@
           "description": "Local ONNX preset (fast, balanced, quality) or a Hugging Face ONNX repository id.",
           "isRequired": false,
           "isSecret": false
+        },
+        {
+          "name": "OTEL_SERVICE_NAME",
+          "description": "OpenTelemetry service.name resource attribute; defaults to tinysearch.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OTEL_EXPORTER_OTLP_ENDPOINT",
+          "description": "Common OTLP endpoint for optional TinySearch traces and metrics.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OTEL_EXPORTER_OTLP_PROTOCOL",
+          "description": "OTLP transport: http/protobuf (default) or grpc.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OTEL_EXPORTER_OTLP_HEADERS",
+          "description": "Optional authentication or routing headers for the OTLP exporter.",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "OTEL_RESOURCE_ATTRIBUTES",
+          "description": "Additional standard OpenTelemetry resource attributes.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OTEL_TRACES_EXPORTER",
+          "description": "Set to otlp to enable traces explicitly or none to disable them.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OTEL_METRICS_EXPORTER",
+          "description": "Set to otlp to enable metrics explicitly or none to disable them.",
+          "isRequired": false,
+          "isSecret": false
+        },
+        {
+          "name": "OTEL_SDK_DISABLED",
+          "description": "Set true to disable all OpenTelemetry signals.",
+          "isRequired": false,
+          "isSecret": false
         }
       ]
     },

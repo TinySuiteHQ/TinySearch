@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import asynccontextmanager
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
@@ -12,9 +13,19 @@ from tinysearch.services.tinysearch_config_service import (
     load_tinysearch_config,
     save_tinysearch_config,
 )
+from tinysearch.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
 
 _OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({"browser_cdp_url"})
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    configure_from_environment()
+    try:
+        yield
+    finally:
+        shutdown_telemetry()
 
 
 def _tinysearch_version() -> str:
@@ -29,6 +40,7 @@ app = FastAPI(
         "grounded retrieval."
     ),
     version=_tinysearch_version(),
+    lifespan=_lifespan,
 )
 
 

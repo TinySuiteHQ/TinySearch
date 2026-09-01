@@ -11,6 +11,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
 
+from tinysearch.telemetry import span_scope
+
 
 DEFAULT_EMBEDDING_BACKEND = "onnx"
 DEFAULT_EMBEDDING_OPENAI_ENV_FILE = ".env"
@@ -480,11 +482,26 @@ def _create_onnx_embedder(
     embedding_model: str | None = None,
 ) -> Callable[[list[str]], Any]:
     async def embedder(inputs: list[str]) -> list[list[float]]:
-        return await asyncio.to_thread(
-            _embed_onnx_sync,
-            list(inputs),
-            embedding_model=embedding_model,
-        )
+        with span_scope(
+            "tinysearch.embed",
+            attributes={
+                "tinysearch.embedding.backend": "onnx",
+                "tinysearch.embed.input.count": len(inputs),
+                "gen_ai.operation.name": "embeddings",
+                "gen_ai.request.model": embedding_model or "default",
+            },
+            operation="embed",
+        ) as telemetry:
+            vectors = await asyncio.to_thread(
+                _embed_onnx_sync,
+                list(inputs),
+                embedding_model=embedding_model,
+            )
+            telemetry.complete(
+                result_count=len(vectors),
+                attributes={"tinysearch.result.count": len(vectors)},
+            )
+            return vectors
 
     return embedder
 
@@ -549,13 +566,28 @@ def _create_openai_compatible_embedder(env_path: Path) -> Callable[[list[str]], 
     client = _load_openai_client(base_url, api_key)
 
     async def embedder(inputs: list[str]) -> list[list[float]]:
-        return await asyncio.to_thread(
-            _embed_openai_compatible_sync,
-            client,
-            model_name,
-            list(inputs),
-            base_url=base_url,
-        )
+        with span_scope(
+            "tinysearch.embed",
+            attributes={
+                "tinysearch.embedding.backend": "openai_compatible",
+                "tinysearch.embed.input.count": len(inputs),
+                "gen_ai.operation.name": "embeddings",
+                "gen_ai.request.model": model_name,
+            },
+            operation="embed",
+        ) as telemetry:
+            vectors = await asyncio.to_thread(
+                _embed_openai_compatible_sync,
+                client,
+                model_name,
+                list(inputs),
+                base_url=base_url,
+            )
+            telemetry.complete(
+                result_count=len(vectors),
+                attributes={"tinysearch.result.count": len(vectors)},
+            )
+            return vectors
 
     return embedder
 
