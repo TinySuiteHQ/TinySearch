@@ -116,9 +116,9 @@ The naive baseline isn't a strawman product, it's the same pages TinySearch
 crawled for each query, fed to the model unfiltered, the way a generic
 "search, then fetch the page" tool (a plain web-search-plus-fetch loop, the
 kind built into most coding agents) would. Measured against the current
-recommended flow (`search` then `scrape_urls`, not the deprecated
-all-in-one `research` tool) and counted on the actual MCP tool-result text,
-TinySearch's primary interface. Reproduce or rerun it yourself:
+recommended flow (`search` then `scrape_urls`) and counted on the actual MCP
+tool-result text, TinySearch's primary interface. Reproduce or rerun it
+yourself:
 
 ```bash
 python scripts/benchmark_token_savings.py --json-out report.json
@@ -150,9 +150,8 @@ The client launches TinySearch over stdio when it needs it. No repository
 clone, hosted account, or paid search key is required.
 
 Fast `search` starts without Chromium or an embedding model. The first scrape
-initializes Chromium; focused scraping and the legacy `research` tool also
-initialize the configured embedding model. Pre-warm both ahead of time if you
-will use those workflows:
+initializes Chromium; focused scraping also initializes the configured
+embedding model. Pre-warm both ahead of time if you will use those workflows:
 
 ```bash
 uvx --from "tinysuite-search[server]" tinysearch setup
@@ -165,14 +164,13 @@ uvx --from "tinysuite-search[server]" tinysearch setup
 Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 [installation guide](https://tinysuite.dev/docs/tinysearch/).
 
-## Four MCP tools
+## Three MCP tools
 
 | Tool | Use it when |
 | --- | --- |
 | `search(items)` | You need fast, backend-ordered discovery without crawling or reranking; batch independent subquestions when useful |
 | `scrape_urls(items)` | You know one to five pages; each item may use `*` for its configured clean page-order token budget |
 | `get_current_datetime()` | A question depends on the current date or time |
-| `research(query)` | Legacy compatibility only; deprecated in favor of `search` followed by scraping |
 
 TinySearch deliberately stays focused. It is a retrieval layer, not another
 agent, chat interface, hosted search product, or permanent web index.
@@ -213,10 +211,6 @@ or transform the evidence.
    configured token budget.
 3. Supply a focused item query when TinySearch should chunk and hybrid-rank
    that page before returning evidence.
-
-The deprecated MCP `research` tool retains the older all-in-one search, crawl,
-and rerank pipeline for compatibility. New MCP integrations should compose
-`search` with `scrape_urls` instead.
 
 ## Python library
 
@@ -289,8 +283,7 @@ page-order mode. Rendering structured evidence into an LLM prompt is explicit,
 so applications can store, inspect, transform, or budget the result first.
 
 The optional FastAPI app mirrors these surfaces. `POST /search` accepts the
-same batch JSON contract; `POST /research` retains its `output_format`
-(`prompt` or `json`) option.
+same batch JSON contract.
 `POST /scrape` accepts one to five `{ "url", "query" }` items and always
 returns structured per-item outcomes.
 The app also exposes `/health`, `/current_datetime`, and read-only `/config`;
@@ -346,43 +339,6 @@ The CDP endpoint is operator-managed and cannot be changed through the HTTP
 the startup environment or the file selected by `TINYSEARCH_CONFIG_PATH`, then
 restart TinySearch. HTTP clients can continue updating other settings by
 omitting `browser_cdp_url` from their partial update.
-
-## Semantic deduplication of evidence
-
-Research ranks an oversampled pool of page chunks, then trims it down to the
-final evidence set. Two duplicate filters run during that trim:
-
-1. **Lexical (always on).** Token-set Jaccard drops near-identical copied text.
-   Controlled by `chunk_dedupe_jaccard_threshold` (default `0.92`; lower is more
-   aggressive, `1.0` disables it).
-2. **Semantic (optional).** Cosine similarity over the chunk embeddings already
-   computed during ranking drops syndicated, paraphrased, or reworded passages
-   that carry the same information with little literal token overlap, exactly
-   the duplicates Jaccard misses.
-
-```json
-{
-  "chunk_semantic_dedupe_enabled": true,
-  "chunk_semantic_dedupe_threshold": 0.92
-}
-```
-
-- `chunk_semantic_dedupe_enabled`: turn the semantic stage on or off. Enabled
-  by default.
-- `chunk_semantic_dedupe_threshold`: cosine similarity (`0` to `1`) above which a
-  chunk is treated as a semantic duplicate of an already-selected chunk. Lower
-  values deduplicate more aggressively; keep it conservative (~`0.92`) so
-  genuinely distinct-but-related evidence is not discarded. `1.0` effectively
-  disables the stage.
-
-**Design tradeoffs.** The semantic stage reuses embeddings from the ranking
-step, so it adds no extra embedding calls and runs on the already-bounded
-oversampled pool. It runs *after* the cheap lexical filter and compares each
-candidate against the running selected output in ranked order, so the
-highest-ranked member of a duplicate group is always the one kept, and per-source
-quotas and fill behavior are preserved. Setting the threshold too low can merge
-distinct facts that happen to be phrased similarly, which is why it defaults to a
-conservative value and can be disabled entirely.
 
 ## Why TinySearch
 
@@ -452,7 +408,6 @@ across Linux, macOS, and Windows.
 ## Entrypoints
 
 - `tinysearch.search` and `tinysearch.scrape_urls`: structured Python API
-- `tinysearch.research`: legacy all-in-one structured Python research pipeline
 - `tinysearch.get_current_datetime`: structured UTC date and time
 - `tinysearch.to_prompt`: pure structured-evidence prompt renderer
 - `tinysearch mcp`: stdio MCP server (also the no-argument default)

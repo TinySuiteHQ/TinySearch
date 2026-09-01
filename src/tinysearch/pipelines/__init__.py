@@ -1,1 +1,1 @@
-"""Research pipeline entrypoints."""
+"""Pipeline entrypoints (scrape)."""

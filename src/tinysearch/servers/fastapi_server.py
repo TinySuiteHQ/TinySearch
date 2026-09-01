@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -36,8 +36,8 @@ app = FastAPI(
     title="TinySearch API",
     description=(
         "HTTP API mirroring the TinySearch MCP tools. POST /search provides "
-        "fast backend-ordered discovery; /research and /scrape provide deep "
-        "grounded retrieval."
+        "fast backend-ordered discovery; /scrape provides deep grounded "
+        "retrieval for known URLs."
     ),
     version=_tinysearch_version(),
     lifespan=_lifespan,
@@ -54,11 +54,6 @@ class ScrapeBatchRequest(BaseModel):
 
     items: list[ScrapeBatchItem] = Field(..., min_length=1, max_length=5)
     max_tokens: int = Field(4000, ge=1)
-
-
-class ResearchRequest(BaseModel):
-    query: str = Field(..., min_length=1)
-    output_format: Literal["prompt", "json"] = "prompt"
 
 
 class SearchItem(BaseModel):
@@ -172,16 +167,6 @@ async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
         max_tokens=request.max_tokens,
         config=load_tinysearch_config(),
     )
-
-
-@app.post("/research")
-async def research_endpoint(request: ResearchRequest) -> dict[str, Any]:
-    result = await core.research(request.query, config=load_tinysearch_config())
-    if request.output_format == "json":
-        return result
-    from tinysearch.prompts import to_prompt
-
-    return {"answer": to_prompt(result)}
 
 
 @app.post("/search")

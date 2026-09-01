@@ -7,7 +7,7 @@ from xml.etree import ElementTree
 
 from mcp import types
 
-from tinysearch.servers.mcp_server import mcp, research, scrape_urls_tool
+from tinysearch.servers.mcp_server import mcp, scrape_urls_tool
 from tinysearch.results import result_envelope
 
 
@@ -34,13 +34,10 @@ def _fn(coro):
 
 
 class ScrapeUrlsToolTests(unittest.IsolatedAsyncioTestCase):
-    def test_research_signature_only_exposes_query(self) -> None:
-        self.assertEqual(list(signature(_fn(research)).parameters), ["query"])
-
     def test_mcp_exposes_only_batch_scrape_tool(self) -> None:
         self.assertEqual(
             set(mcp._tool_manager._tools),
-            {"get_current_datetime", "search", "research", "scrape_urls"},
+            {"get_current_datetime", "search", "scrape_urls"},
         )
         self.assertEqual(list(signature(_fn(scrape_urls_tool)).parameters), ["items"])
 

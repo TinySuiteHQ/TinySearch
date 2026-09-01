@@ -14,11 +14,7 @@ from starlette.datastructures import Headers
 from starlette.routing import BaseRoute, Mount, Route
 
 from tinysearch import core
-from tinysearch.services.tinysearch_config_service import (
-    load_tinysearch_config,
-    tokenizer_name_for_config,
-)
-from tinysearch.services.token_counter_service import token_count
+from tinysearch.services.tinysearch_config_service import load_tinysearch_config
 from tinysearch.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
 # MCP 1.x defines its generic Settings model before FastMCP, leaving the
@@ -158,14 +154,13 @@ async def _run_streamable_http_combined_async() -> None:
 
 
 MCP_INSTRUCTIONS = """
-This MCP server exposes four tools:
+This MCP server exposes three tools:
 
 1. get_current_datetime()
 2. search(items)
-3. research(query)
-4. scrape_urls(items)
+3. scrape_urls(items)
 
-Before calling research for time-sensitive questions, or if you need to add
+Before calling search for time-sensitive questions, or if you need to add
 year/month/day context to a query, call get_current_datetime() first to orient
 on the current date and time (UTC).
 
@@ -180,8 +175,6 @@ Use domains only for hard source restrictions. It returns backend-ordered
 titles, URLs, previews, dates, and compact backend outcomes; it does not
 embed, rerank, crawl, or ground the results.
 
-The research tool is deprecated. Use search instead.
-
 Use scrape_urls after URLs are already known. Pass one to five independent
 URL/query pairs. Omit an item's query or pass `*` to receive the configured
 2,000-token budget of clean Markdown in page order; supply a focused query
@@ -190,10 +183,6 @@ bounded list of related_links -- links found on that page, ranked against
 the query -- so you can decide which page to open next. It does not crawl
 them automatically.
 """.strip()
-
-
-def _answer_tokens(answer: str) -> int:
-    return token_count(answer, encoding_name=tokenizer_name_for_config())
 
 
 def _log(message: str) -> None:
@@ -228,7 +217,7 @@ mcp = FastMCP(
     description=(
         "Return the current date and time in UTC. Call this first for "
         "time-sensitive questions, relative dates such as latest, this year, "
-        "or last month, or before adding year/month/day context to a research "
+        "or last month, or before adding year/month/day context to a search "
         "query."
     ),
 )
@@ -276,47 +265,6 @@ async def search_tool(
     from tinysearch.services.grounded_prompt_service import format_search_batch_results
 
     return format_search_batch_results(items=result["items"])
-
-
-@mcp.tool(
-    name="research",
-    title="Research (Deprecated)",
-    description=(
-        "Deprecated: use search instead. This legacy tool discovers relevant URLs, "
-        "crawls ranked pages, and returns a search-grounded XML answer prompt."
-    ),
-)
-async def research(
-    query: Annotated[
-        str,
-        Field(
-            description=(
-                "A query describing the information to find. "
-                "Rewrite or refine it as needed for effective retrieval while "
-                "preserving important names, constraints, qualifiers, and intent."
-            )
-        ),
-    ],
-) -> str:
-    started = time.monotonic()
-    _log(f"research called query={query!r}")
-    try:
-        config = load_tinysearch_config()
-        result = await core.research(query, config=config)
-        elapsed = time.monotonic() - started
-        from tinysearch.prompts import to_prompt
-
-        answer = to_prompt(result)
-        _log(
-            "research returning "
-            f"answer_tokens={_answer_tokens(answer)} "
-            f"elapsed={elapsed:.2f}s"
-        )
-        return answer
-    except Exception as exc:
-        elapsed = time.monotonic() - started
-        _log(f"research failed elapsed={elapsed:.2f}s error={exc!r}")
-        raise
 
 
 @mcp.tool(
