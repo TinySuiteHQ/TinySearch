@@ -9,6 +9,8 @@ from typing import Any
 
 from rank_bm25 import BM25Okapi
 
+from tinysearch.telemetry import span_scope
+
 EmbeddingVector = Sequence[float]
 EmbeddingFn = Callable[
     [list[str]],
@@ -157,7 +159,7 @@ async def _embed_query_and_document_chunks(
     return query_embedding, doc_embeddings
 
 
-async def rank_chunks_hybrid(
+async def _rank_chunks_hybrid(
     query: str,
     chunks: Sequence[dict[str, Any]],
     *,
@@ -278,3 +280,50 @@ async def rank_chunks_hybrid(
         ranked = ranked[: max(0, top_k)]
 
     return ranked
+
+
+async def rank_chunks_hybrid(
+    query: str,
+    chunks: Sequence[dict[str, Any]],
+    *,
+    embedder: EmbeddingFn | None = None,
+    top_k: int | None = None,
+    rrf_similarity_cutoff: float | None = None,
+    hybrid_similarity_cutoff: float | None = None,
+    dense_weight: float = 0.5,
+    dense_query_prefix: str = "task: search result | query: ",
+    dense_document_prefix: str = "title: none | text: ",
+    dense_document_embed_batch_size: int | None = 32,
+    rrf_k: int = 60,
+    semaphore: "Any" = None,
+    timeout_seconds: float = 60.0,
+    max_timeout_retries: int = 2,
+) -> list[dict[str, Any]]:
+    """Instrument hybrid ranking without exposing query or chunk content."""
+
+    with span_scope(
+        "tinysearch.rank",
+        attributes={"tinysearch.chunk.count": len(chunks)},
+        operation="rank",
+    ) as telemetry:
+        ranked = await _rank_chunks_hybrid(
+            query,
+            chunks,
+            embedder=embedder,
+            top_k=top_k,
+            rrf_similarity_cutoff=rrf_similarity_cutoff,
+            hybrid_similarity_cutoff=hybrid_similarity_cutoff,
+            dense_weight=dense_weight,
+            dense_query_prefix=dense_query_prefix,
+            dense_document_prefix=dense_document_prefix,
+            dense_document_embed_batch_size=dense_document_embed_batch_size,
+            rrf_k=rrf_k,
+            semaphore=semaphore,
+            timeout_seconds=timeout_seconds,
+            max_timeout_retries=max_timeout_retries,
+        )
+        telemetry.complete(
+            result_count=len(ranked),
+            attributes={"tinysearch.result.count": len(ranked)},
+        )
+        return ranked

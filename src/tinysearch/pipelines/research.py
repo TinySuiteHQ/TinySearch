@@ -25,6 +25,7 @@ from tinysearch.services.hybrid_embed_search_service import EmbeddingFn, rank_ch
 from tinysearch.results import public_chunk, result_envelope
 from tinysearch.services.site_crawl_service import create_browser_crawler, crawl
 from tinysearch.services.text_chunking_service import chunk_text, truncate_text_to_max_tokens
+from tinysearch.telemetry import span_scope
 from tinysearch.services.web_search_service import (
     SearchBackendError,
     SearchResult,
@@ -283,22 +284,30 @@ async def run_research_pipeline(
             await emit("start", query=query)
             await emit("search_start", query=query, search_top_k=search_top_k)
             _research_log(f"search start top_k={search_top_k}")
-            try:
-                raw_results = search_fn(query, max(1, search_top_k))
-            except SearchBackendError as exc:
-                _research_log(f"search backend error: {exc}")
-                await emit("search_backend_error", error=str(exc))
-                return finish(
-                    "search_backend_error",
-                    [],
-                    [str(exc)],
-                    {
-                        "search_results": 0,
-                        "sources_crawled": 0,
-                        "chunks_considered": 0,
-                        "chunks_selected": 0,
-                    },
-                    error_code="search_backend_error",
+            with span_scope("tinysearch.search", operation="research_search") as search_telemetry:
+                try:
+                    raw_results = search_fn(query, max(1, search_top_k))
+                except SearchBackendError as exc:
+                    search_telemetry.complete(
+                        outcome="error", error_type=type(exc).__name__
+                    )
+                    _research_log(f"search backend error: {exc}")
+                    await emit("search_backend_error", error=str(exc))
+                    return finish(
+                        "search_backend_error",
+                        [],
+                        [str(exc)],
+                        {
+                            "search_results": 0,
+                            "sources_crawled": 0,
+                            "chunks_considered": 0,
+                            "chunks_selected": 0,
+                        },
+                        error_code="search_backend_error",
+                    )
+                search_telemetry.complete(
+                    result_count=len(raw_results),
+                    attributes={"tinysearch.result.count": len(raw_results)},
                 )
             results = [result for result in raw_results if _is_http_url(result.url)]
             results = filter_blocked_search_results(results, blocked_domains or [])
@@ -368,41 +377,55 @@ async def run_research_pipeline(
                 url = str(search_doc["url"])
                 async with crawl_semaphore:
                     await emit("crawl_start", url=url)
-                    try:
-                        crawled = await crawl_fn(
-                            url=url,
-                            encoding_name=tokenizer_name,
-                            user_query=query,
-                            fit_markdown_mode=crawl_fit_markdown_mode,
-                            fit_min_chars=crawl_fit_min_chars,
-                            bm25_threshold=crawl_bm25_threshold,
-                            bm25_language=crawl_bm25_language,
-                            pruning_threshold=crawl_pruning_threshold,
-                            crawler=shared_crawler,
+                    with span_scope(
+                        "tinysearch.fetch",
+                        attributes={"tinysearch.browser.used": True},
+                        operation="fetch",
+                    ) as fetch_telemetry:
+                        try:
+                            crawled = await crawl_fn(
+                                url=url,
+                                encoding_name=tokenizer_name,
+                                user_query=query,
+                                fit_markdown_mode=crawl_fit_markdown_mode,
+                                fit_min_chars=crawl_fit_min_chars,
+                                bm25_threshold=crawl_bm25_threshold,
+                                bm25_language=crawl_bm25_language,
+                                pruning_threshold=crawl_pruning_threshold,
+                                crawler=shared_crawler,
+                            )
+                        except Exception as exc:
+                            fetch_telemetry.complete(
+                                outcome="error", error_type=type(exc).__name__
+                            )
+                            error = f"{url}: {exc}"
+                            await emit("crawl_error", url=url, error=str(exc))
+                            return {
+                                **search_doc,
+                                "ranked_chunks": [],
+                                "chunks_total": 0,
+                                "crawl_error": error,
+                            }
+                        fetch_telemetry.complete()
+                    with span_scope("tinysearch.extract", operation="extract") as extract_telemetry:
+                        markdown = str(
+                            crawled.get("markdown") or crawled.get("markdown_raw") or ""
+                        ).strip()
+                        markdown = truncate_text_to_max_tokens(
+                            markdown,
+                            crawl_max_page_tokens,
+                            tokenizer_name,
                         )
-                    except Exception as exc:
-                        error = f"{url}: {exc}"
-                        await emit("crawl_error", url=url, error=str(exc))
-                        return {
-                            **search_doc,
-                            "ranked_chunks": [],
-                            "chunks_total": 0,
-                            "crawl_error": error,
-                        }
-                    markdown = str(
-                        crawled.get("markdown") or crawled.get("markdown_raw") or ""
-                    ).strip()
-                    markdown = truncate_text_to_max_tokens(
-                        markdown,
-                        crawl_max_page_tokens,
-                        tokenizer_name,
-                    )
-                    chunks = chunk_text(
-                        markdown,
-                        max_chunk_tokens=crawl_max_chunk_tokens,
-                        overlap_tokens=crawl_overlap_tokens,
-                        encoding_name=tokenizer_name,
-                    )
+                        chunks = chunk_text(
+                            markdown,
+                            max_chunk_tokens=crawl_max_chunk_tokens,
+                            overlap_tokens=crawl_overlap_tokens,
+                            encoding_name=tokenizer_name,
+                        )
+                        extract_telemetry.complete(
+                            result_count=len(chunks),
+                            attributes={"tinysearch.chunk.count": len(chunks)},
+                        )
                     source_chunks = [
                         {
                             **chunk,

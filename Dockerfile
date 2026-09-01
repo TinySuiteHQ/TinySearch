@@ -27,7 +27,7 @@ COPY . .
 
 RUN mkdir -p /ms-playwright \
     && pip install --upgrade pip \
-    && pip install ".[server]" \
+    && pip install ".[server,telemetry]" \
     && python -m playwright install --with-deps chromium \
     && pip check \
     && pip uninstall --yes pip setuptools \

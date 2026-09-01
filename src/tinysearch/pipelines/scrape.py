@@ -44,6 +44,7 @@ from tinysearch.services.site_crawl_service import (
 )
 from tinysearch.services.text_chunking_service import chunk_text
 from tinysearch.services.url_safety_service import assert_url_is_fetchable
+from tinysearch.telemetry import span_scope
 
 
 # Bounds embedding cost on link-heavy pages; ranking only ever returns
@@ -215,32 +216,52 @@ async def run_scrape_pipeline(
             document_fn = partial(
                 extract_document_text, timeout_seconds=min(fetch_timeout_seconds, 30.0)
             )
-        markdown, _document_type = await extract_document_with_timeout(
-            url=safe_url,
-            timeout_seconds=fetch_timeout_seconds,
-            document_fn=document_fn,
-        )
+        with span_scope(
+            "tinysearch.fetch",
+            attributes={
+                "tinysearch.browser.used": False,
+                "tinysearch.document.type": suffix or "document",
+            },
+            operation="fetch",
+        ) as fetch_telemetry:
+            markdown, _document_type = await extract_document_with_timeout(
+                url=safe_url,
+                timeout_seconds=fetch_timeout_seconds,
+                document_fn=document_fn,
+            )
+            fetch_telemetry.complete()
     else:
         crawl_fn = crawl_fn or fetch_html_for_query
-        page = await fetch_html_with_timeout(
-            url=safe_url,
-            query=None if raw_page_order else cleaned_query,
-            bm25_threshold=resolved["crawl_bm25_threshold"],
-            bm25_language=resolved["crawl_bm25_language"],
-            timeout_seconds=fetch_timeout_seconds,
-            crawl_fn=crawl_fn,
-            crawler=crawler,
-        )
+        with span_scope(
+            "tinysearch.fetch",
+            attributes={"tinysearch.browser.used": True, "tinysearch.document.type": "html"},
+            operation="fetch",
+        ) as fetch_telemetry:
+            page = await fetch_html_with_timeout(
+                url=safe_url,
+                query=None if raw_page_order else cleaned_query,
+                bm25_threshold=resolved["crawl_bm25_threshold"],
+                bm25_language=resolved["crawl_bm25_language"],
+                timeout_seconds=fetch_timeout_seconds,
+                crawl_fn=crawl_fn,
+                crawler=crawler,
+            )
+            fetch_telemetry.complete()
         final_url = str(page.get("final_url") or safe_url)
         html = str(page.get("html") or "")
         crawl_metadata = page.get("metadata") or {}
         if final_url != safe_url:
             final_url = assert_url_is_fetchable(final_url, blocked_domains)
-        candidate_links = sanitize_and_dedupe_links(
-            extract_links_from_html(html, final_url),
-            base_url=final_url,
-            blocked_domains=blocked_domains,
-        )
+        with span_scope("tinysearch.extract", operation="extract") as extract_telemetry:
+            candidate_links = sanitize_and_dedupe_links(
+                extract_links_from_html(html, final_url),
+                base_url=final_url,
+                blocked_domains=blocked_domains,
+            )
+            extract_telemetry.complete(
+                result_count=len(candidate_links),
+                attributes={"tinysearch.link.candidate.count": len(candidate_links)},
+            )
         markdown_raw = str(page.get("markdown_raw") or "")
         markdown_fit = str(page.get("markdown_fit") or "")
         markdown = markdown_raw if raw_page_order else markdown_fit or markdown_raw
@@ -287,12 +308,17 @@ async def run_scrape_pipeline(
             link_tokens=link_tokens,
         )
 
-    chunks = chunk_text(
-        text=markdown,
-        max_chunk_tokens=resolved["crawl_max_chunk_tokens"],
-        overlap_tokens=resolved["crawl_overlap_tokens"],
-        encoding_name=tokenizer_name,
-    )
+    with span_scope("tinysearch.extract", operation="extract") as extract_telemetry:
+        chunks = chunk_text(
+            text=markdown,
+            max_chunk_tokens=resolved["crawl_max_chunk_tokens"],
+            overlap_tokens=resolved["crawl_overlap_tokens"],
+            encoding_name=tokenizer_name,
+        )
+        extract_telemetry.complete(
+            result_count=len(chunks),
+            attributes={"tinysearch.chunk.count": len(chunks)},
+        )
     if not chunks:
         raise EmptyContentError(f"no chunks produced from {final_url}")
 

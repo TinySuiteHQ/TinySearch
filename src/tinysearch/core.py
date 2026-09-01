@@ -29,6 +29,7 @@ from tinysearch.services.web_search_service import (
     search as web_search,
     search_batch_with_metadata,
 )
+from tinysearch.telemetry import span_scope
 
 get_current_datetime = current_datetime_payload
 
@@ -118,41 +119,60 @@ async def search(
     a single ``query`` (with optional ``domains``); see ``coerce_search_items``.
     """
     normalized = coerce_search_items(items, query=query, domains=domains)
-    resolved_config = _resolve_config(config)
-    started = time.monotonic()
-    responses = await search_batch_with_metadata(
-        normalized,
-        limit=int(resolved_config["search_max_results"]),
-        config=resolved_config,
-        concurrency=int(resolved_config["search_max_concurrent_items"]),
-    )
-    output_items = []
-    for item, response in zip(normalized, responses, strict=True):
-        output_items.append({
-            "query": item["query"] if isinstance(item["query"], str) else "",
-            "domains": response.domains,
-            "status": response.status,
-            "results": [
-                {"rank": rank, "title": result.title, "url": result.url,
-                 "preview": result.text, "published_at": result.published_at}
-                for rank, result in enumerate(response.results, start=1)
-            ],
-            "backend_attempts": response.attempts,
-            "error": response.error,
-            "stats": {"result_count": len(response.results), "latency_ms": response.latency_ms},
-        })
-    return {
-        "schema_version": "1",
-        "operation": "search_batch",
-        "status": "partial" if any(item["status"] == "error" for item in output_items) else "ok",
-        "items": output_items,
-        "errors": [],
-        "stats": {
-            "search_item_count": len(output_items),
-            "backend_attempt_count": sum(len(item["backend_attempts"]) for item in output_items),
-            "latency_ms": round((time.monotonic() - started) * 1000),
-        },
-    }
+    with span_scope(
+        "tinysearch.search",
+        attributes={"tinysearch.batch.item.count": len(normalized)},
+        operation="search",
+        record_operation_metric=True,
+    ) as telemetry:
+        resolved_config = _resolve_config(config)
+        started = time.monotonic()
+        responses = await search_batch_with_metadata(
+            normalized,
+            limit=int(resolved_config["search_max_results"]),
+            config=resolved_config,
+            concurrency=int(resolved_config["search_max_concurrent_items"]),
+        )
+        output_items = []
+        for item, response in zip(normalized, responses, strict=True):
+            output_items.append({
+                "query": item["query"] if isinstance(item["query"], str) else "",
+                "domains": response.domains,
+                "status": response.status,
+                "results": [
+                    {"rank": rank, "title": result.title, "url": result.url,
+                     "preview": result.text, "published_at": result.published_at}
+                    for rank, result in enumerate(response.results, start=1)
+                ],
+                "backend_attempts": response.attempts,
+                "error": response.error,
+                "stats": {"result_count": len(response.results), "latency_ms": response.latency_ms},
+            })
+        status = "partial" if any(item["status"] == "error" for item in output_items) else "ok"
+        result_count = sum(len(response.results) for response in responses)
+        telemetry.complete(
+            outcome=status,
+            result_count=result_count,
+            error_type="partial_failure" if status == "partial" else None,
+            attributes={
+                "tinysearch.result.count": result_count,
+                "tinysearch.search.backend.attempt.count": sum(
+                    len(item["backend_attempts"]) for item in output_items
+                ),
+            },
+        )
+        return {
+            "schema_version": "1",
+            "operation": "search_batch",
+            "status": status,
+            "items": output_items,
+            "errors": [],
+            "stats": {
+                "search_item_count": len(output_items),
+                "backend_attempt_count": sum(len(item["backend_attempts"]) for item in output_items),
+                "latency_ms": round((time.monotonic() - started) * 1000),
+            },
+        }
 
 
 async def research(query: str, *, config: ConfigInput | None = None) -> dict[str, Any]:
@@ -162,16 +182,31 @@ async def research(query: str, *, config: ConfigInput | None = None) -> dict[str
     only (see `_resolve_config`), pass a dict instead of pointing
     `TINYSEARCH_CONFIG_PATH` at a file when calling this as a library.
     """
-    query = normalize_query(query)
-    resolved_config = _resolve_config(config)
-    await _ensure_local_bundle_for_config(resolved_config)
-    await _ensure_browser_bundle(resolved_config)
-    result = await run_research_pipeline(
-        query,
-        config=resolved_config,
-        search_fn=partial(web_search, config=resolved_config),
-    )
-    return result.to_dict()
+    with span_scope(
+        "tinysearch.research",
+        operation="research",
+        record_operation_metric=True,
+    ) as telemetry:
+        query = normalize_query(query)
+        resolved_config = _resolve_config(config)
+        await _ensure_local_bundle_for_config(resolved_config)
+        await _ensure_browser_bundle(resolved_config)
+        result = (
+            await run_research_pipeline(
+                query,
+                config=resolved_config,
+                search_fn=partial(web_search, config=resolved_config),
+            )
+        ).to_dict()
+        status = str(result.get("status") or "ok")
+        source_count = len(result.get("sources") or [])
+        telemetry.complete(
+            outcome=status,
+            result_count=source_count,
+            error_type=status if status in {"timeout", "search_backend_error", "partial"} else None,
+            attributes={"tinysearch.source.count": source_count},
+        )
+        return result
 
 
 async def _scrape_url_with_config(
@@ -182,44 +217,57 @@ async def _scrape_url_with_config(
     config: dict[str, Any],
     crawler: Any | None,
 ) -> dict[str, Any]:
-    started = time.monotonic()
-    scrape_result = await run_scrape_pipeline(
-        url,
-        query,
-        max_tokens=max_tokens,
-        include_metadata=True,
-        config=config,
-        crawler=crawler,
-    )
-    source = {
-        "id": "1",
-        "title": scrape_result.title,
-        "url": scrape_result.url,
-        "metadata": scrape_result.metadata or {},
-        "chunks": [
-            public_chunk(chunk, rank=rank)
-            for rank, chunk in enumerate(scrape_result.chunks, start=1)
-        ],
-        "links": [
-            public_link(link, rank=rank)
-            for rank, link in enumerate(scrape_result.links, start=1)
-        ],
-    }
-    return result_envelope(
-        operation="scrape",
-        status="ok",
-        query=scrape_result.query,
-        retrieved_at=scrape_result.retrieved_at,
-        sources=[source],
-        stats={
-            "requested_url": url,
-            "content_tokens": scrape_result.content_tokens,
-            "related_link_tokens": getattr(scrape_result, "link_tokens", 0),
-            "truncated": scrape_result.truncated,
-            "browser_used": not is_document_url(url),
-            "latency_ms": round((time.monotonic() - started) * 1000),
-        },
-    )
+    with span_scope(
+        "tinysearch.scrape.item",
+        attributes={"tinysearch.browser.used": not is_document_url(url)},
+        operation="scrape_item",
+    ) as telemetry:
+        started = time.monotonic()
+        scrape_result = await run_scrape_pipeline(
+            url,
+            query,
+            max_tokens=max_tokens,
+            include_metadata=True,
+            config=config,
+            crawler=crawler,
+        )
+        source = {
+            "id": "1",
+            "title": scrape_result.title,
+            "url": scrape_result.url,
+            "metadata": scrape_result.metadata or {},
+            "chunks": [
+                public_chunk(chunk, rank=rank)
+                for rank, chunk in enumerate(scrape_result.chunks, start=1)
+            ],
+            "links": [
+                public_link(link, rank=rank)
+                for rank, link in enumerate(scrape_result.links, start=1)
+            ],
+        }
+        telemetry.complete(
+            result_count=1,
+            attributes={
+                "tinysearch.chunk.count": len(scrape_result.chunks),
+                "tinysearch.content.token.count": scrape_result.content_tokens,
+                "tinysearch.related_link.token.count": getattr(scrape_result, "link_tokens", 0),
+            },
+        )
+        return result_envelope(
+            operation="scrape",
+            status="ok",
+            query=scrape_result.query,
+            retrieved_at=scrape_result.retrieved_at,
+            sources=[source],
+            stats={
+                "requested_url": url,
+                "content_tokens": scrape_result.content_tokens,
+                "related_link_tokens": getattr(scrape_result, "link_tokens", 0),
+                "truncated": scrape_result.truncated,
+                "browser_used": not is_document_url(url),
+                "latency_ms": round((time.monotonic() - started) * 1000),
+            },
+        )
 
 
 async def scrape_urls(
@@ -234,61 +282,75 @@ async def scrape_urls(
     first-token page-order extraction. Repeat a URL in separate items when it
     needs distinct focused queries; the five-item cap bounds total work.
     """
-    if not 1 <= len(items) <= 5:
-        raise ValueError("items must contain between 1 and 5 URL/query pairs")
-    if max_tokens <= 0:
-        raise ValueError("max_tokens must be positive")
-    normalized: list[tuple[str, str | None]] = []
-    for item in items:
-        url = item.get("url")
-        query = item.get("query")
-        if not isinstance(url, str) or not url.strip():
-            raise ValueError("every batch item requires a non-empty url")
-        if query is not None and not isinstance(query, str):
-            raise ValueError("batch item query must be a string, null, or omitted")
-        normalized.append((url, query))
+    with span_scope(
+        "tinysearch.scrape",
+        attributes={"tinysearch.batch.item.count": len(items)},
+        operation="scrape",
+        record_operation_metric=True,
+    ) as telemetry:
+        if not 1 <= len(items) <= 5:
+            raise ValueError("items must contain between 1 and 5 URL/query pairs")
+        if max_tokens <= 0:
+            raise ValueError("max_tokens must be positive")
+        normalized: list[tuple[str, str | None]] = []
+        for item in items:
+            url = item.get("url")
+            query = item.get("query")
+            if not isinstance(url, str) or not url.strip():
+                raise ValueError("every batch item requires a non-empty url")
+            if query is not None and not isinstance(query, str):
+                raise ValueError("batch item query must be a string, null, or omitted")
+            normalized.append((url, query))
 
-    resolved = _resolve_config(config)
-    if any((query or "").strip() not in {"", "*"} for _, query in normalized):
-        await _ensure_local_bundle_for_config(resolved)
-    await _ensure_browser_bundle(resolved)
+        resolved = _resolve_config(config)
+        if any((query or "").strip() not in {"", "*"} for _, query in normalized):
+            await _ensure_local_bundle_for_config(resolved)
+        await _ensure_browser_bundle(resolved)
 
-    needs_browser = any(not is_document_url(url) for url, _ in normalized)
-    crawler_ctx = (
-        create_browser_crawler(resolved)
-        if needs_browser
-        else contextlib.nullcontext(None)
-    )
-    async with crawler_ctx as shared_crawler:
-        settled = await asyncio.gather(
-            *(
-                _scrape_url_with_config(
-                    url,
-                    query,
-                    max_tokens=max_tokens,
-                    config=resolved,
-                    crawler=shared_crawler,
-                )
-                for url, query in normalized
-            ),
-            return_exceptions=True,
+        needs_browser = any(not is_document_url(url) for url, _ in normalized)
+        crawler_ctx = (
+            create_browser_crawler(resolved)
+            if needs_browser
+            else contextlib.nullcontext(None)
         )
-    results: list[dict[str, Any]] = []
-    for (url, query), outcome in zip(normalized, settled, strict=True):
-        if isinstance(outcome, Exception):
-            results.append(
-                {
-                    "url": url,
-                    "query": (query or "*").strip() or "*",
-                    "status": "error",
-                    "error": {"code": type(outcome).__name__, "message": str(outcome)},
-                }
+        async with crawler_ctx as shared_crawler:
+            settled = await asyncio.gather(
+                *(
+                    _scrape_url_with_config(
+                        url,
+                        query,
+                        max_tokens=max_tokens,
+                        config=resolved,
+                        crawler=shared_crawler,
+                    )
+                    for url, query in normalized
+                ),
+                return_exceptions=True,
             )
-        else:
-            results.append({"status": "ok", "result": outcome})
-    return {
-        "schema_version": "1",
-        "operation": "scrape_batch",
-        "status": "partial" if any(item["status"] == "error" for item in results) else "ok",
-        "results": results,
-    }
+        results: list[dict[str, Any]] = []
+        for (url, query), outcome in zip(normalized, settled, strict=True):
+            if isinstance(outcome, Exception):
+                results.append(
+                    {
+                        "url": url,
+                        "query": (query or "*").strip() or "*",
+                        "status": "error",
+                        "error": {"code": type(outcome).__name__, "message": str(outcome)},
+                    }
+                )
+            else:
+                results.append({"status": "ok", "result": outcome})
+        status = "partial" if any(item["status"] == "error" for item in results) else "ok"
+        success_count = sum(1 for item in results if item["status"] == "ok")
+        telemetry.complete(
+            outcome=status,
+            result_count=success_count,
+            error_type="partial_failure" if status == "partial" else None,
+            attributes={"tinysearch.result.count": success_count},
+        )
+        return {
+            "schema_version": "1",
+            "operation": "scrape_batch",
+            "status": status,
+            "results": results,
+        }

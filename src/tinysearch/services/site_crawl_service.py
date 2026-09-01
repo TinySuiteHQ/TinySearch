@@ -18,6 +18,7 @@ from tinysearch.services.token_counter_service import (
     encode_tokens,
     token_count,
 )
+from tinysearch.telemetry import span_scope
 
 _DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
     "ignore_links": True,
@@ -350,11 +351,17 @@ async def crawl(
         pruning_threshold=pruning_threshold,
     )
 
-    if crawler is not None:
-        result = await crawler.arun(url=url, config=run_config)
-    else:
-        async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
-            result = await owned_crawler.arun(url=url, config=run_config)
+    with span_scope(
+        "tinysearch.browser",
+        attributes={"tinysearch.browser.used": True},
+        operation="browser",
+    ) as browser_telemetry:
+        if crawler is not None:
+            result = await crawler.arun(url=url, config=run_config)
+        else:
+            async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
+                result = await owned_crawler.arun(url=url, config=run_config)
+        browser_telemetry.complete()
 
     html = _get_html(result)
     markdown_raw = _get_markdown_raw(result)
@@ -427,11 +434,17 @@ async def fetch_html_for_query(
         )
     config = CrawlerRunConfig(**config_kwargs)
 
-    if crawler is not None:
-        result = await crawler.arun(url=url, config=config)
-    else:
-        async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
-            result = await owned_crawler.arun(url=url, config=config)
+    with span_scope(
+        "tinysearch.browser",
+        attributes={"tinysearch.browser.used": True},
+        operation="browser",
+    ) as browser_telemetry:
+        if crawler is not None:
+            result = await crawler.arun(url=url, config=config)
+        else:
+            async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
+                result = await owned_crawler.arun(url=url, config=config)
+        browser_telemetry.complete()
 
     final_url = (
         getattr(result, "redirected_url", None)
