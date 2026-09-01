@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -54,6 +54,35 @@ class ScrapeBatchRequest(BaseModel):
 
     items: list[ScrapeBatchItem] = Field(..., min_length=1, max_length=5)
     max_tokens: int = Field(4000, ge=1)
+
+
+class BrowseAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["click", "type", "scroll", "wait"]
+    selector: str | None = None
+    text: str | None = None
+    submit: bool | None = None
+    to: Literal["top", "bottom"] | None = None
+    amount: int | None = None
+    seconds: float | None = None
+    timeout_seconds: float | None = None
+
+
+class BrowseRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: HttpUrl | None = None
+    actions: list[BrowseAction] = Field(default_factory=list)
+    query: str | None = None
+    session_id: str | None = None
+    max_tokens: int = Field(4000, ge=1)
+
+    @model_validator(mode="after")
+    def _require_url_or_session(self) -> "BrowseRequest":
+        if self.url is None and not self.session_id:
+            raise ValueError("provide url (to open a session) or an existing session_id")
+        return self
 
 
 class SearchItem(BaseModel):
@@ -164,6 +193,25 @@ async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
     """Scrape one to five independent URL/query pairs with per-item outcomes."""
     return await core.scrape_urls(
         [item.model_dump(mode="json") for item in request.items],
+        max_tokens=request.max_tokens,
+        config=load_tinysearch_config(),
+    )
+
+
+@app.post("/browse")
+async def browse_endpoint(request: BrowseRequest) -> dict[str, Any]:
+    """Interact with a live browser page (click/type/scroll/wait) and return it scraped.
+
+    Call with just `url` to open a session and observe the rendered page --
+    the response's `stats.session_id` names it. Call again with that
+    `session_id` and `actions` to act on the same page; omit `url` on that
+    follow-up call to keep reusing the session's current page.
+    """
+    return await core.browse(
+        str(request.url) if request.url is not None else None,
+        [action.model_dump(exclude_none=True) for action in request.actions],
+        query=request.query,
+        session_id=request.session_id,
         max_tokens=request.max_tokens,
         config=load_tinysearch_config(),
     )

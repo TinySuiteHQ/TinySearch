@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from tinysearch.services.site_crawl_service import (
-    _BOILERPLATE_EXCLUDED_TAGS,
+    BOILERPLATE_EXCLUDED_TAGS,
     _crawler_config_for_fit_markdown,
     _lightweight_browser_config,
 )
@@ -51,7 +51,7 @@ class CrawlerConfigBoilerplateExclusionTests(unittest.TestCase):
             bm25_language="english",
             pruning_threshold=0.48,
         )
-        self.assertEqual(config.excluded_tags, _BOILERPLATE_EXCLUDED_TAGS)
+        self.assertEqual(config.excluded_tags, BOILERPLATE_EXCLUDED_TAGS)
 
     def test_bm25_mode_excludes_boilerplate_tags(self) -> None:
         config = _crawler_config_for_fit_markdown(
@@ -61,7 +61,7 @@ class CrawlerConfigBoilerplateExclusionTests(unittest.TestCase):
             bm25_language="english",
             pruning_threshold=0.48,
         )
-        self.assertEqual(config.excluded_tags, _BOILERPLATE_EXCLUDED_TAGS)
+        self.assertEqual(config.excluded_tags, BOILERPLATE_EXCLUDED_TAGS)
 
     def test_bm25_mode_with_empty_query_falls_back_but_still_excludes_tags(self) -> None:
         config = _crawler_config_for_fit_markdown(
@@ -71,7 +71,7 @@ class CrawlerConfigBoilerplateExclusionTests(unittest.TestCase):
             bm25_language="english",
             pruning_threshold=0.48,
         )
-        self.assertEqual(config.excluded_tags, _BOILERPLATE_EXCLUDED_TAGS)
+        self.assertEqual(config.excluded_tags, BOILERPLATE_EXCLUDED_TAGS)
 
     def test_pruning_mode_excludes_boilerplate_tags(self) -> None:
         config = _crawler_config_for_fit_markdown(
@@ -81,7 +81,7 @@ class CrawlerConfigBoilerplateExclusionTests(unittest.TestCase):
             bm25_language="english",
             pruning_threshold=0.48,
         )
-        self.assertEqual(config.excluded_tags, _BOILERPLATE_EXCLUDED_TAGS)
+        self.assertEqual(config.excluded_tags, BOILERPLATE_EXCLUDED_TAGS)
 
 
 if __name__ == "__main__":

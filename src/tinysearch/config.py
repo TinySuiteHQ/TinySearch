@@ -63,6 +63,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "ddgs_timeout_seconds": 20.0,
     "ddgs_backend": "auto",
     "browser_cdp_url": "",
+    "browser_max_actions": 8,
+    "browser_max_sessions": 4,
+    "browser_session_idle_seconds": 300.0,
+    "browser_action_timeout_seconds": 10.0,
 }
 
 _INT_FIELDS = {
@@ -79,6 +83,8 @@ _INT_FIELDS = {
     "crawl_overlap_tokens",
     "crawl_max_page_tokens",
     "dense_document_embed_batch_size",
+    "browser_max_actions",
+    "browser_max_sessions",
 }
 _FLOAT_FIELDS = {
     "chunk_rrf_cutoff",
@@ -87,6 +93,8 @@ _FLOAT_FIELDS = {
     "crawl_pruning_threshold",
     "embedding_timeout_seconds",
     "ddgs_timeout_seconds",
+    "browser_session_idle_seconds",
+    "browser_action_timeout_seconds",
 }
 
 
@@ -104,11 +112,19 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         config.pop(legacy, None)
     for key in _INT_FIELDS:
         config[key] = int(config[key])
-    for key in ("search_max_concurrent_items", "scrape_max_link_tokens"):
+    for key in (
+        "search_max_concurrent_items",
+        "scrape_max_link_tokens",
+        "browser_max_actions",
+        "browser_max_sessions",
+    ):
         if config[key] <= 0:
             raise ValueError(f"tinysearch config {key} must be positive")
     for key in _FLOAT_FIELDS:
         config[key] = float(config[key])
+    for key in ("browser_session_idle_seconds", "browser_action_timeout_seconds"):
+        if config[key] <= 0:
+            raise ValueError(f"tinysearch config {key} must be positive")
     raw_timeout = config.get("pipeline_timeout_seconds")
     config["pipeline_timeout_seconds"] = (
         float(raw_timeout) if raw_timeout is not None else None

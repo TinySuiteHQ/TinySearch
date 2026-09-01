@@ -154,11 +154,12 @@ async def _run_streamable_http_combined_async() -> None:
 
 
 MCP_INSTRUCTIONS = """
-This MCP server exposes three tools:
+This MCP server exposes four tools:
 
 1. get_current_datetime()
 2. search(items)
 3. scrape_urls(items)
+4. browse(url, actions, query, session_id)
 
 Before calling search for time-sensitive questions, or if you need to add
 year/month/day context to a query, call get_current_datetime() first to orient
@@ -182,6 +183,18 @@ only when relevant chunks should be selected. Each page also returns a
 bounded list of related_links -- links found on that page, ranked against
 the query -- so you can decide which page to open next. It does not crawl
 them automatically.
+
+Use browse only when scrape_urls cannot reach the needed information because
+it requires clicking, typing, scrolling, or waiting for content to appear
+(e.g. dismissing a banner, submitting a search box, paging through results).
+It is an observe-then-act primitive, not a one-shot batch call: call it
+first with just a url and no actions to open the page and see it rendered;
+its response includes stats.session_id. Then call it again with that
+session_id and one or more actions (based on what you actually saw) to act
+on the *same* live page and see the updated result -- omit url on this
+follow-up call. The session stays open, idle, for a few minutes so you can
+keep interacting; it is not a persistent or authenticated session, and it
+does not batch multiple URLs.
 """.strip()
 
 
@@ -294,6 +307,61 @@ async def scrape_urls_tool(
     from tinysearch.services.grounded_prompt_service import format_url_grounded_answers
 
     return format_url_grounded_answers(results=result["results"])
+
+
+@mcp.tool(
+    name="browse",
+    title="Browse",
+    description=(
+        "Interact with a live browser page for content scrape_urls cannot reach "
+        "(click, type, scroll, wait). Call first with url only to open and observe "
+        "the rendered page; its session_id is returned so a follow-up call can pass "
+        "session_id with actions to act on that same page and see the result. "
+        "One URL per session, not a batch."
+    ),
+)
+async def browse_tool(
+    url: Annotated[
+        str | None,
+        Field(description="Page to open. Required unless session_id is given."),
+    ] = None,
+    actions: Annotated[
+        list[dict[str, Any]] | None,
+        Field(
+            description=(
+                "Up to a few actions to run in order on the page: "
+                "{action: 'click', selector} | "
+                "{action: 'type', selector, text, submit?} | "
+                "{action: 'scroll', selector} or {action:'scroll', to:'top'|'bottom'} "
+                "or {action:'scroll', amount:<px>} | "
+                "{action: 'wait', seconds} or {action:'wait', selector, timeout_seconds}. "
+                "Omit or leave empty to just observe the current page."
+            )
+        ),
+    ] = None,
+    query: Annotated[
+        str | None,
+        Field(description="Focused query to rank content chunks; omit or '*' for page-order content."),
+    ] = None,
+    session_id: Annotated[
+        str | None,
+        Field(description="A session_id from a prior browse() call, to act on that same live page."),
+    ] = None,
+) -> str:
+    config = load_tinysearch_config()
+    action_count = len(actions or [])
+    _log(f"browse called url={bool(url)} session_id={bool(session_id)} actions={action_count}")
+    result = await core.browse(
+        url,
+        actions,
+        query=query,
+        session_id=session_id,
+        max_tokens=config["scrape_max_tokens"],
+        config=config,
+    )
+    from tinysearch.services.grounded_prompt_service import format_browse_result
+
+    return format_browse_result(result=result)
 
 
 def main() -> None:

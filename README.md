@@ -164,12 +164,13 @@ uvx --from "tinysuite-search[server]" tinysearch setup
 Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 [installation guide](https://tinysuite.dev/docs/tinysearch/).
 
-## Three MCP tools
+## Four MCP tools
 
 | Tool | Use it when |
 | --- | --- |
 | `search(items)` | You need fast, backend-ordered discovery without crawling or reranking; batch independent subquestions when useful |
 | `scrape_urls(items)` | You know one to five pages; each item may use `*` for its configured clean page-order token budget |
+| `browse(url, actions, session_id)` | A page needs a click, type, scroll, or wait before it can be read; observe first with no actions, then act with the returned `session_id` |
 | `get_current_datetime()` | A question depends on the current date or time |
 
 TinySearch deliberately stays focused. It is a retrieval layer, not another
@@ -211,6 +212,11 @@ or transform the evidence.
    configured token budget.
 3. Supply a focused item query when TinySearch should chunk and hybrid-rank
    that page before returning evidence.
+4. `browse` steps in only when `scrape_urls` can't reach the content because
+   it needs interaction. Call it with just a `url` to open and observe the
+   rendered page; call it again with the returned `session_id` and one or
+   more `click`/`type`/`scroll`/`wait` actions to act on that same live page.
+   The session stays open, idle, for a few minutes, then closes on its own.
 
 ## Python library
 
@@ -407,7 +413,7 @@ across Linux, macOS, and Windows.
 
 ## Entrypoints
 
-- `tinysearch.search` and `tinysearch.scrape_urls`: structured Python API
+- `tinysearch.search`, `tinysearch.scrape_urls`, and `tinysearch.browse`: structured Python API
 - `tinysearch.get_current_datetime`: structured UTC date and time
 - `tinysearch.to_prompt`: pure structured-evidence prompt renderer
 - `tinysearch mcp`: stdio MCP server (also the no-argument default)

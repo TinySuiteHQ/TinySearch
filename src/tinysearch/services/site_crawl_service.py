@@ -20,7 +20,7 @@ from tinysearch.services.token_counter_service import (
 )
 from tinysearch.telemetry import span_scope
 
-_DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
+DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
     "ignore_links": True,
     "ignore_images": True,
     "skip_internal_links": True,
@@ -39,7 +39,7 @@ _DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
 # truncating real article content. Does not catch every kind of boilerplate
 # (e.g. an inline login-CTA banner not wrapped in one of these tags), just
 # the common semantically-tagged chrome.
-_BOILERPLATE_EXCLUDED_TAGS: list[str] = ["nav", "header", "footer", "aside"]
+BOILERPLATE_EXCLUDED_TAGS: list[str] = ["nav", "header", "footer", "aside"]
 
 
 @lru_cache(maxsize=1)
@@ -59,7 +59,7 @@ def _crawl4ai_stack() -> tuple[Any, Any, Any, Any, Any, Any]:
     )
 
 
-def _ensure_utf8_stdio() -> None:
+def ensure_utf8_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8")
@@ -67,7 +67,7 @@ def _ensure_utf8_stdio() -> None:
             pass
 
 
-def _get_markdown_raw(result: Any) -> str:
+def get_markdown_raw(result: Any) -> str:
     md_obj = getattr(result, "markdown", None)
 
     if md_obj is None:
@@ -79,7 +79,7 @@ def _get_markdown_raw(result: Any) -> str:
     return getattr(md_obj, "raw_markdown", "") or ""
 
 
-def _get_markdown_fit(result: Any) -> str:
+def get_markdown_fit(result: Any) -> str:
     md_obj = getattr(result, "markdown", None)
 
     if md_obj is None:
@@ -91,7 +91,7 @@ def _get_markdown_fit(result: Any) -> str:
     return getattr(md_obj, "fit_markdown", "") or ""
 
 
-def _get_html(result: Any) -> str:
+def get_html(result: Any) -> str:
     return getattr(result, "html", "") or ""
 
 
@@ -132,11 +132,11 @@ def _crawler_config_for_fit_markdown(
     )
     mode = fit_markdown_mode.strip().lower()
     if mode in ("", "off", "none", "raw"):
-        return CrawlerRunConfig(verbose=False, excluded_tags=_BOILERPLATE_EXCLUDED_TAGS)
+        return CrawlerRunConfig(verbose=False, excluded_tags=BOILERPLATE_EXCLUDED_TAGS)
     if mode == "bm25":
         q = (user_query or "").strip()
         if not q:
-            return CrawlerRunConfig(verbose=False, excluded_tags=_BOILERPLATE_EXCLUDED_TAGS)
+            return CrawlerRunConfig(verbose=False, excluded_tags=BOILERPLATE_EXCLUDED_TAGS)
         content_filter = BM25ContentFilter(
             user_query=q,
             bm25_threshold=bm25_threshold,
@@ -151,10 +151,10 @@ def _crawler_config_for_fit_markdown(
         )
     return CrawlerRunConfig(
         verbose=False,
-        excluded_tags=_BOILERPLATE_EXCLUDED_TAGS,
+        excluded_tags=BOILERPLATE_EXCLUDED_TAGS,
         markdown_generator=DefaultMarkdownGenerator(
             content_filter=content_filter,
-            options=dict(_DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
+            options=dict(DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
         )
     )
 
@@ -339,7 +339,7 @@ async def crawl(
     Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
     to reuse one browser across many calls instead of launching a fresh one here.
     """
-    _ensure_utf8_stdio()
+    ensure_utf8_stdio()
 
     AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
 
@@ -363,9 +363,9 @@ async def crawl(
                 result = await owned_crawler.arun(url=url, config=run_config)
         browser_telemetry.complete()
 
-    html = _get_html(result)
-    markdown_raw = _get_markdown_raw(result)
-    markdown_fit = (_get_markdown_fit(result) or "") if run_config is not None else ""
+    html = get_html(result)
+    markdown_raw = get_markdown_raw(result)
+    markdown_fit = (get_markdown_fit(result) or "") if run_config is not None else ""
 
     markdown_body, markdown_source = _pick_markdown_for_chunking(
         markdown_raw,
@@ -412,7 +412,7 @@ async def fetch_html_for_query(
     Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
     to reuse one browser across many calls instead of launching a fresh one here.
     """
-    _ensure_utf8_stdio()
+    ensure_utf8_stdio()
 
     AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, BM25ContentFilter, _, DefaultMarkdownGenerator = (
         _crawl4ai_stack()
@@ -420,7 +420,7 @@ async def fetch_html_for_query(
 
     config_kwargs: dict[str, Any] = {
         "verbose": False,
-        "excluded_tags": _BOILERPLATE_EXCLUDED_TAGS,
+        "excluded_tags": BOILERPLATE_EXCLUDED_TAGS,
     }
     if user_query:
         bm25_filter = BM25ContentFilter(
@@ -430,7 +430,7 @@ async def fetch_html_for_query(
         )
         config_kwargs["markdown_generator"] = DefaultMarkdownGenerator(
             content_filter=bm25_filter,
-            options=dict(_DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
+            options=dict(DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
         )
     config = CrawlerRunConfig(**config_kwargs)
 
@@ -456,9 +456,9 @@ async def fetch_html_for_query(
 
     return {
         "final_url": str(final_url),
-        "html": _get_html(result),
-        "markdown_raw": _get_markdown_raw(result),
-        "markdown_fit": (_get_markdown_fit(result) or "") if user_query else "",
+        "html": get_html(result),
+        "markdown_raw": get_markdown_raw(result),
+        "markdown_fit": (get_markdown_fit(result) or "") if user_query else "",
         "metadata": metadata,
     }
 
@@ -482,7 +482,7 @@ async def crawl_search(
 
     Returns: url, query, html, markdown_raw, markdown_fit, tokens_*, chunks, ranked_chunks
     """
-    _ensure_utf8_stdio()
+    ensure_utf8_stdio()
 
     if is_document_url(url):
         markdown_raw, document_type = await asyncio.to_thread(extract_document_text, url)
@@ -557,7 +557,7 @@ async def crawl_search(
 
 
 if __name__ == "__main__":
-    _ensure_utf8_stdio()
+    ensure_utf8_stdio()
 
     crawl_result = asyncio.run(
         crawl_search(
