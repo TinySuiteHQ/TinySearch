@@ -29,6 +29,7 @@
 
 [![Website](https://img.shields.io/badge/tinysuite.dev-home-000000?logo=googlechrome&logoColor=white)](https://tinysuite.dev)
 [![PyPI version](https://img.shields.io/pypi/v/tinysuite-search?label=pypi)](https://pypi.org/project/tinysuite-search/)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/tinysuite-search?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/tinysuite-search)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinySearch?label=release)](https://github.com/TinySuiteHQ/TinySearch/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/TinySuiteHQ/TinySearch)](https://github.com/TinySuiteHQ/TinySearch/commits/main)
