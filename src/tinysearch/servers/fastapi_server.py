@@ -153,9 +153,10 @@ async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
                 "code": "operator_managed_config",
                 "message": (
                     f"{', '.join(operator_managed_fields)} cannot be changed over "
-                    "HTTP. Configure these at startup in the file selected by "
-                    "TINYSEARCH_CONFIG_PATH, then restart TinySearch. Omit them "
-                    "when updating other settings."
+                    "HTTP. Configure these at startup with "
+                    f"{', '.join('TINYSEARCH_' + f.upper() for f in operator_managed_fields)} "
+                    "or in the file selected by TINYSEARCH_CONFIG_PATH, then "
+                    "restart TinySearch. Omit them when updating other settings."
                 ),
                 "fields": operator_managed_fields,
             },

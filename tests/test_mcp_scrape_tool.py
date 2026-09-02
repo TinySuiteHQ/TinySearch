@@ -37,7 +37,7 @@ class ScrapeUrlsToolTests(unittest.IsolatedAsyncioTestCase):
     def test_mcp_exposes_only_batch_scrape_tool(self) -> None:
         self.assertEqual(
             set(mcp._tool_manager._tools),
-            {"get_current_datetime", "search", "scrape_urls", "browse"},
+            {"get_current_datetime", "search", "scrape_urls"},
         )
         self.assertEqual(list(signature(_fn(scrape_urls_tool)).parameters), ["items"])
 
