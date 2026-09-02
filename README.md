@@ -170,7 +170,7 @@ Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 | --- | --- |
 | `search(items)` | You need fast, backend-ordered discovery without crawling or reranking; batch independent subquestions when useful |
 | `scrape_urls(items)` | You know one to five pages; each item may use `*` for its configured clean page-order token budget |
-| `browse(url, actions, session_id, control_revision)` | A page needs interaction before it can be read; observe first, then act using its returned grounded control refs |
+| `playwright_browser_*` | A page needs interaction before it can be read; opt-in browser tools, off by default (see [Browser automation](#browser-automation)) |
 | `get_current_datetime()` | A question depends on the current date or time |
 
 TinySearch deliberately stays focused. It is a retrieval layer, not another
@@ -212,14 +212,9 @@ or transform the evidence.
    configured token budget.
 3. Supply a focused item query when TinySearch should chunk and hybrid-rank
    that page before returning evidence.
-4. `browse` steps in only when `scrape_urls` can't reach the content because
-   it needs interaction. Call it with just a `url` to open and observe the
-   rendered page and its bounded list of interactive controls; call it again
-   with the returned `session_id`, `control_revision`, and a control `ref` for
-   `click`/`type`/`scroll`/`wait` actions. TinySearch keeps the actual selectors
-   server-side, so agents act only on controls they observed rather than guessing
-   CSS selectors.
-   The session stays open, idle, for a few minutes, then closes on its own.
+4. The `playwright_browser_*` tools step in only when `scrape_urls` can't
+   reach the content because it needs interaction. They are off by default;
+   see [Browser automation](#browser-automation).
 
 ## Python library
 
@@ -319,11 +314,53 @@ Brave is only consulted when the primary call errors or returns no results.
 Full key reference, SearXNG JSON-output setup, and Compose details live in the
 [configuration reference](https://tinysuite.dev/docs/tinysearch/configuration/).
 
-## External browser over CDP
+## Browser automation
 
-TinySearch uses its bundled Playwright Chromium by default. To use a browser
-that you operate separately, set its Chrome DevTools Protocol endpoint in the
-config file:
+`scrape_urls` is a static fetch. It cannot see content that JavaScript renders
+after load, content behind a cookie interstitial, a "load more" control, or a
+client-side search UI. For those pages TinySearch can expose a real browser.
+
+TinySearch does not implement browser automation itself. It supervises
+Microsoft's [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) as
+a child process and re-exports a narrow subset of its tools. Enable it in the
+config file (Node.js 18+ must be on `PATH`):
+
+```json
+{
+  "browser_backend": "playwright_mcp",
+  "browser_storage_state_path": "/data/browser-state.json"
+}
+```
+
+Nine tools are exposed: `playwright_browser_navigate`, `_find`, `_snapshot`,
+`_click`, `_type`, `_wait_for`, `_take_screenshot`, `_tabs`, and `_close`.
+Prefer `_find` over `_snapshot`; it returns matching accessibility-tree nodes
+and nearby context far more cheaply than a full page snapshot.
+
+Three deliberate choices:
+
+- **The allowlist is structural.** `browser_evaluate` and
+  `browser_run_code_unsafe` are never registered, so they are absent from the
+  tool schema rather than discouraged by prompt. A page that injects
+  instructions into its own text has no arbitrary-code tool to reach for. The
+  same holds for `fill_form`, `file_upload`, `drag`, and `drop`.
+- **Responses are capped.** Output above `browser_response_char_budget` is
+  written to `browser_output_dir` and replaced by a head plus that path.
+  Screenshots always go to disk, never inline into the conversation.
+- **Cookies persist, sessions don't.** Sessions run `--isolated` and seed from
+  `browser_storage_state_path`, so a consent banner accepted once is not paid
+  for on every later navigation, while no browser profile lock is taken and
+  concurrent clients do not conflict. That file is a server-side path; it is
+  never exposed to a model or over HTTP.
+
+Upstream is version-pinned. Argument schemas are read from the running child
+and re-exported verbatim, so an argument rename on a version bump is inherited
+rather than silently diverging.
+
+### External browser over CDP
+
+To drive a browser you operate separately, set its Chrome DevTools Protocol
+endpoint:
 
 ```json
 {
@@ -331,11 +368,9 @@ config file:
 }
 ```
 
-Server processes also accept `TINYSEARCH_BROWSER_CDP_URL`. When either setting
-is present, TinySearch connects through Crawl4AI instead of installing or
-launching the bundled Chromium. The external browser owns its executable,
-profile, proxy, and fingerprint configuration; TinySearch does not select or
-install a particular browser backend.
+Server processes also accept `TINYSEARCH_BROWSER_CDP_URL`. The external browser
+owns its executable, profile, proxy, and fingerprint configuration; TinySearch
+does not select or install a particular browser backend.
 
 Treat a CDP endpoint as privileged remote control of the browser. Keep it on a
 private network or loopback interface, require authentication when it crosses
@@ -343,11 +378,13 @@ a host boundary, and do not expose port 9222 directly to the public internet.
 When TinySearch itself runs in Docker, `localhost` refers to the TinySearch
 container, so use an endpoint reachable from that container.
 
-The CDP endpoint is operator-managed and cannot be changed through the HTTP
-`PUT /config` endpoint, even when configuration writes are enabled. Set it in
-the startup environment or the file selected by `TINYSEARCH_CONFIG_PATH`, then
-restart TinySearch. HTTP clients can continue updating other settings by
-omitting `browser_cdp_url` from their partial update.
+`browser_backend`, `browser_cdp_url`, `browser_storage_state_path`, and
+`browser_output_dir` are operator-managed and cannot be changed through the
+HTTP `PUT /config` endpoint, even when configuration writes are enabled. Set
+them in the startup environment (`TINYSEARCH_BROWSER_BACKEND` and friends) or
+the file selected by `TINYSEARCH_CONFIG_PATH`, then restart TinySearch. HTTP
+clients can continue updating other settings by omitting these fields from
+their partial update.
 
 ## Why TinySearch
 
@@ -416,7 +453,7 @@ across Linux, macOS, and Windows.
 
 ## Entrypoints
 
-- `tinysearch.search`, `tinysearch.scrape_urls`, and `tinysearch.browse`: structured Python API
+- `tinysearch.search` and `tinysearch.scrape_urls`: structured Python API
 - `tinysearch.get_current_datetime`: structured UTC date and time
 - `tinysearch.to_prompt`: pure structured-evidence prompt renderer
 - `tinysearch mcp`: stdio MCP server (also the no-argument default)

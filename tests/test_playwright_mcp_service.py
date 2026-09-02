@@ -53,9 +53,19 @@ class BuildLaunchArgsTests(unittest.TestCase):
         self.assertIn("--block-service-workers", args)
         self.assertEqual(args[args.index("--image-responses") + 1], "omit")
 
-    def test_never_enables_extra_capability_groups(self) -> None:
-        """--caps would re-add the vision/pdf/devtools/network/storage/testing tools."""
+    def test_no_capability_groups_without_a_storage_state_path(self) -> None:
+        """--caps would otherwise re-add the vision/pdf/devtools/network/testing tools."""
         self.assertNotIn("--caps", pw.build_launch_args(self._config()))
+
+    def test_storage_capability_is_the_only_one_ever_enabled(self) -> None:
+        """Needed so accepted cookies survive shutdown; never exposed to a model."""
+        with tempfile.TemporaryDirectory() as tmp:
+            args = pw.build_launch_args(
+                self._config(browser_storage_state_path=str(Path(tmp) / "state.json"))
+            )
+            self.assertEqual(args.count("--caps"), 1)
+            self.assertEqual(args[args.index("--caps") + 1], "storage")
+            self.assertNotIn("browser_storage_state", pw.exposed_tool_names())
 
     def test_does_not_take_a_profile_lock(self) -> None:
         """A --user-data-dir profile can only be held by one browser at a time."""
@@ -80,6 +90,26 @@ class BuildLaunchArgsTests(unittest.TestCase):
             )
             self.assertEqual(args[args.index("--storage-state") + 1], str(target))
             self.assertTrue(target.parent.is_dir())
+
+    def test_missing_storage_state_file_is_seeded(self) -> None:
+        """Upstream refuses to start when --storage-state points at a missing file."""
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "state.json"
+            pw.build_launch_args(self._config(browser_storage_state_path=str(target)))
+            self.assertTrue(target.is_file())
+            self.assertEqual(
+                json.loads(target.read_text(encoding="utf-8")),
+                {"cookies": [], "origins": []},
+            )
+
+    def test_existing_storage_state_file_is_not_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "state.json"
+            target.write_text('{"cookies": [{"name": "kept"}], "origins": []}', encoding="utf-8")
+            pw.build_launch_args(self._config(browser_storage_state_path=str(target)))
+            self.assertIn("kept", target.read_text(encoding="utf-8"))
 
 
 class CapResponseTests(unittest.TestCase):

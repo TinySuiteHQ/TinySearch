@@ -139,8 +139,15 @@ def build_launch_args(config: Mapping[str, Any]) -> list[str]:
     navigation) without taking a profile lock -- and keeps that state a
     server-side path the model never sees or transmits.
 
-    `--caps` is never passed: the vision, pdf, devtools, network, storage,
-    and testing tool groups stay off at the source.
+    The vision, pdf, devtools, network, and testing tool groups stay off at
+    the source. `--caps=storage` is the one exception, and only when a
+    storage-state path is configured: in isolated mode `--storage-state` is
+    load-only, so without the storage capability the cookies accepted during
+    a session are discarded at shutdown and the next run meets the same
+    consent wall. TinySearch calls that capability's save tool itself, on
+    shutdown (see `PlaywrightMcpClient._persist_storage_state`); enabling a
+    capability on the child is not the same as exposing it, because only
+    `_EXPOSED_TOOLS` is ever registered for a model to call.
     """
     args = [
         "-y",
@@ -154,8 +161,12 @@ def build_launch_args(config: Mapping[str, Any]) -> list[str]:
 
     storage_state = str(config.get("browser_storage_state_path") or "").strip()
     if storage_state:
-        Path(storage_state).parent.mkdir(parents=True, exist_ok=True)
-        args += ["--storage-state", storage_state]
+        path = Path(storage_state)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Upstream errors out rather than starting when the file is absent.
+        if not path.exists():
+            path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+        args += ["--storage-state", str(path), "--caps", "storage"]
 
     output_dir = str(config.get("browser_output_dir") or "").strip()
     if output_dir:
@@ -322,6 +333,11 @@ class PlaywrightMcpClient:
         await self.start()
         self._last_used = time.monotonic()
 
+        # Cookies must be captured while the browser is still open; after
+        # browser_close there is no context left to read them from.
+        if upstream_name == "browser_close":
+            await self._persist_storage_state()
+
         with span_scope(
             "tinysearch.playwright",
             attributes={"tinysearch.playwright.tool": upstream_name},
@@ -353,7 +369,25 @@ class PlaywrightMcpClient:
             await self.stop()
         return capped
 
+    async def _persist_storage_state(self) -> None:
+        """Write cookies accepted this session back to the shared state file.
+
+        This is what makes a consent banner a one-time cost rather than a
+        per-navigation one. Best-effort: a browser that is already closed, or
+        a child without the storage capability, must not turn shutdown into
+        an error.
+        """
+        target = str(self._config.get("browser_storage_state_path") or "").strip()
+        session = self._session
+        if not target or session is None:
+            return
+        try:
+            await session.call_tool("browser_storage_state", {"filename": target})
+        except Exception:
+            pass
+
     async def stop(self) -> None:
+        await self._persist_storage_state()
         runner, self._runner = self._runner, None
         idle_task, self._idle_task = self._idle_task, None
         self._stop.set()
