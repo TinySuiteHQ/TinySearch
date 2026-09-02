@@ -14,16 +14,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     TINYSEARCH_VERSION=${TINYSEARCH_VERSION} \
     TINYSEARCH_MODELS_DIR=/data/models \
-    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
-    NPM_CONFIG_CACHE=/home/tinysearch/.npm
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
-    && apt-get install -y --no-install-recommends ca-certificates curl gosu gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
+    && apt-get install -y --no-install-recommends ca-certificates curl gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY . .
@@ -36,8 +33,8 @@ RUN mkdir -p /ms-playwright \
     && pip uninstall --yes pip setuptools \
     && chmod -R a+rX /ms-playwright \
     && useradd --create-home --shell /usr/sbin/nologin tinysearch \
-    && mkdir -p /data/models /app/trace_logs /home/tinysearch/.npm \
-    && chown -R tinysearch:tinysearch /data /app/trace_logs /home/tinysearch/.npm \
+    && mkdir -p /data/models /app/trace_logs \
+    && chown -R tinysearch:tinysearch /data /app/trace_logs \
     && chmod +x /app/docker-entrypoint.sh
 
 EXPOSE 8000
