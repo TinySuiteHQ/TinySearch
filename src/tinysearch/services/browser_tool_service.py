@@ -1,4 +1,4 @@
-"""Nine browser tools implemented directly on Playwright's Python API.
+"""Browser automation implemented directly on Playwright's Python API.
 
 TinySearch already depends on Playwright (through Crawl4AI) and already
 installs its Chromium, so browser automation needs no second runtime, no
@@ -58,6 +58,38 @@ TOOL_NAMES = (
     "close",
 )
 
+# MCP has no way to group or nest tools: `tools/list` is flat, and every
+# schema is re-sent to the model on every request. So the nine operations are
+# published as three tools. `navigate` and `find` stay first-class -- they are
+# the two a model reaches for constantly, and they are distinct intents that
+# earn their own descriptions -- while the remaining seven are one page
+# session's lifecycle and fold behind `browser_act(action=...)`. Measured on
+# the real schemas, that takes the whole server from 1,658 to 1,308 tokens
+# (12 tools to 6).
+ACT_ACTIONS = (
+    "snapshot",
+    "click",
+    "type",
+    "wait_for",
+    "take_screenshot",
+    "tabs",
+    "close",
+)
+
+# Which arguments each folded action actually consumes. A flat dispatcher
+# cannot express "click requires target" in JSON Schema, so the requirement is
+# enforced here and reported as a precise error instead of a TypeError.
+_ACT_PARAMETERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    # action: (accepted, required)
+    "snapshot": (("depth",), ()),
+    "click": (("target",), ("target",)),
+    "type": (("target", "text", "submit"), ("target", "text")),
+    "wait_for": (("time_seconds", "text", "text_gone"), ()),
+    "take_screenshot": (("full_page",), ()),
+    "tabs": (("action", "index"), ()),
+    "close": ((), ()),
+}
+
 _REF_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
 
 
@@ -67,6 +99,38 @@ class BrowserToolError(Exception):
 
 class BrowserDisabledError(BrowserToolError):
     """Browser tools were called while `browser_backend` is "off"."""
+
+
+def resolve_act_arguments(action: str, supplied: Mapping[str, Any]) -> dict[str, Any]:
+    """Select the arguments one folded action uses, and check the required ones.
+
+    Arguments meant for a different action are dropped rather than rejected:
+    a model that sends a stray `depth` alongside a click should get the click,
+    not an error about an argument that simply does not apply here.
+    """
+    if action not in _ACT_PARAMETERS:
+        raise BrowserToolError(
+            f"action must be one of {list(ACT_ACTIONS)}, not {action!r}"
+        )
+    accepted, required = _ACT_PARAMETERS[action]
+    # The MCP dispatcher uses "" / 0 rather than null for absent optional
+    # arguments: a nullable JSON-Schema type costs an anyOf block per
+    # parameter, and this tool has nine of them. Booleans are exempt --
+    # False is a real value -- as is any argument whose own zero is
+    # meaningful, such as a tab index.
+    resolved = {}
+    for key, value in supplied.items():
+        if key not in accepted or value is None:
+            continue
+        if not isinstance(value, bool) and key != "index" and value in ("", 0, 0.0):
+            continue
+        resolved[key] = value
+    missing = [key for key in required if resolved.get(key) in (None, "")]
+    if missing:
+        raise BrowserToolError(
+            f"browser action {action!r} requires {', '.join(missing)}"
+        )
+    return resolved
 
 
 def browser_backend_enabled(config: Mapping[str, Any]) -> bool:

@@ -135,6 +135,45 @@ class SessionBehaviourTests(unittest.IsolatedAsyncioTestCase):
                 await session.wait_for(**kwargs)
 
 
+class ResolveActArgumentsTests(unittest.TestCase):
+    def test_every_folded_action_is_routable(self) -> None:
+        self.assertEqual(set(bt.ACT_ACTIONS), set(bt.TOOL_NAMES) - {"navigate", "find"})
+
+    def test_unknown_action_is_rejected(self) -> None:
+        with self.assertRaises(bt.BrowserToolError):
+            bt.resolve_act_arguments("evaluate", {})
+
+    def test_arguments_for_other_actions_are_dropped(self) -> None:
+        """A stray argument should not fail a call it does not apply to."""
+        resolved = bt.resolve_act_arguments("click", {"target": "e1", "depth": 5, "full_page": True})
+        self.assertEqual(resolved, {"target": "e1"})
+
+    def test_missing_required_argument_names_itself(self) -> None:
+        with self.assertRaises(bt.BrowserToolError) as raised:
+            bt.resolve_act_arguments("click", {"target": ""})
+        self.assertIn("requires target", str(raised.exception))
+
+        with self.assertRaises(bt.BrowserToolError) as raised:
+            bt.resolve_act_arguments("type", {"target": "e1", "text": ""})
+        self.assertIn("requires text", str(raised.exception))
+
+    def test_empty_and_zero_sentinels_mean_absent(self) -> None:
+        self.assertEqual(bt.resolve_act_arguments("snapshot", {"depth": 0}), {})
+        self.assertEqual(bt.resolve_act_arguments("wait_for", {"time_seconds": 0.0}), {})
+
+    def test_false_is_a_real_boolean_not_an_absent_value(self) -> None:
+        resolved = bt.resolve_act_arguments("type", {"target": "e1", "text": "x", "submit": False})
+        self.assertIs(resolved["submit"], False)
+
+    def test_tab_index_zero_is_preserved(self) -> None:
+        """Tab 0 is a valid target, so zero cannot mean 'absent' here."""
+        resolved = bt.resolve_act_arguments("tabs", {"action": "select", "index": 0})
+        self.assertEqual(resolved, {"action": "select", "index": 0})
+
+    def test_close_takes_no_arguments(self) -> None:
+        self.assertEqual(bt.resolve_act_arguments("close", {"target": "e1"}), {})
+
+
 class CallToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_tool_is_rejected(self) -> None:
         with self.assertRaises(bt.BrowserToolError):
@@ -162,10 +201,11 @@ class ToolRegistrationTests(unittest.TestCase):
     def _names(self) -> set[str]:
         return set(self.mcp_server.mcp._tool_manager._tools)
 
-    def test_all_nine_browser_tools_ship_by_default(self) -> None:
+    def test_browser_ships_as_three_tools_not_nine(self) -> None:
+        """MCP cannot group tools, so seven lifecycle actions fold into browser_act."""
         self.assertEqual(
             {n for n in self._names() if n.startswith("browser_")},
-            {f"browser_{name}" for name in bt.TOOL_NAMES},
+            {"browser_navigate", "browser_find", "browser_act"},
         )
 
     def test_disabling_removes_them_from_the_schema(self) -> None:
@@ -174,7 +214,7 @@ class ToolRegistrationTests(unittest.TestCase):
         ):
             removed = self.mcp_server.unregister_browser_tools_if_disabled()
 
-        self.assertEqual(len(removed), 9)
+        self.assertEqual(len(removed), 3)
         self.assertFalse({n for n in self._names() if n.startswith("browser_")})
         self.assertLessEqual({"search", "scrape_urls", "get_current_datetime"}, self._names())
 

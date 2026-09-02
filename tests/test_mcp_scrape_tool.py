@@ -41,9 +41,7 @@ class ScrapeUrlsToolTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             {name for name in mcp._tool_manager._tools if name.startswith("browser_")},
-            {f"browser_{name}" for name in ("navigate", "find", "snapshot", "click",
-                                            "type", "wait_for", "take_screenshot",
-                                            "tabs", "close")},
+            {"browser_navigate", "browser_find", "browser_act"},
         )
         self.assertEqual(list(signature(_fn(scrape_urls_tool)).parameters), ["items"])
 

@@ -170,7 +170,7 @@ Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 | --- | --- |
 | `search(items)` | You need fast, backend-ordered discovery without crawling or reranking; batch independent subquestions when useful |
 | `scrape_urls(items)` | You know one to five pages; each item may use `*` for its configured clean page-order token budget |
-| `browser_*` (nine tools) | A page needs interaction before it can be read; see [Browser automation](#browser-automation) |
+| `browser_navigate` / `browser_find` / `browser_act` | A page needs interaction before it can be read; see [Browser automation](#browser-automation) |
 | `get_current_datetime()` | A question depends on the current date or time |
 
 TinySearch deliberately stays focused. It is a retrieval layer, not another
@@ -325,16 +325,23 @@ through Crawl4AI and already installs its Chromium for scraping, so the browser
 tools reuse the same driver and the same browser: no second runtime, no second
 browser, no child process.
 
-Nine tools: `browser_navigate`, `browser_find`, `browser_snapshot`,
-`browser_click`, `browser_type`, `browser_wait_for`,
-`browser_take_screenshot`, `browser_tabs`, and `browser_close`.
+Three tools: `browser_navigate`, `browser_find`, and `browser_act`, the last
+folding `snapshot`, `click`, `type`, `wait_for`, `take_screenshot`, `tabs`,
+and `close` behind one `action` parameter.
+
+That split is deliberate. MCP has no way to group or nest tools -- `tools/list`
+is flat and every schema is re-sent to the model on every request -- so nine
+separate browser tools cost 1,190 tokens of the server's 1,658. Publishing the
+two distinct high-frequency intents as their own tools and folding one page
+session's lifecycle behind a dispatcher brings the whole server to 1,308
+tokens across six tools, without making the common path harder to use.
 
 The model reads a compact accessibility tree where each node carries a stable
 ref, names one, and TinySearch acts on it with genuine browser input events:
 
 ```
 browser_navigate  -> "- button \"Accept all\" [ref=e79]"
-browser_click     -> target: "e79"
+browser_act       -> action: "click", target: "e79"
 ```
 
 Nothing synthesizes DOM events or invents CSS selectors, and `click`/`type`
@@ -346,7 +353,7 @@ Three deliberate choices:
   fills forms, uploads, or drags. A page that injects instructions into its own
   rendered text has nothing dangerous to reach for, because the capability is
   absent rather than discouraged.
-- **Depth is the token lever.** `browser_snapshot` takes a `depth`, returning a
+- **Depth is the token lever.** `browser_act(action="snapshot")` takes a `depth`, returning a
   shallower but still valid tree instead of a truncated string. On a large page
   that is ~700 characters versus ~33,000. Prefer `browser_find`, which returns
   only matching nodes and their context.
