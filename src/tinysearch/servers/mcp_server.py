@@ -309,81 +309,173 @@ async def scrape_urls_tool(
     return format_url_grounded_answers(results=result["results"])
 
 
-async def register_browser_tools() -> list[str]:
-    """Register the allowlisted Playwright tools using the child's own schemas.
+async def _browser(name: str, **arguments: Any) -> str:
+    """Run one browser tool against the shared session."""
+    from tinysearch.services.browser_tool_service import call_tool
 
-    Argument schemas are fetched from the running `@playwright/mcp` child and
-    re-exported verbatim rather than restated in Python signatures, so an
-    argument rename on a version bump is inherited instead of silently
-    diverging. Registration therefore requires briefly starting the child.
+    _log(f"browser_{name} called")
+    return await call_tool(name, load_tinysearch_config(), **arguments)
 
-    Tools outside `exposed_tool_names()` -- notably `browser_evaluate` and
-    `browser_run_code_unsafe` -- are never registered at all. A page cannot
-    talk a model into calling a tool that is absent from the schema.
+
+@mcp.tool(
+    name="browser_navigate",
+    title="Browser Navigate",
+    description=(
+        "Open an exact URL in a live browser and return its accessibility snapshot. "
+        "Use only after scrape_urls returned thin, empty, or clearly incomplete "
+        "content for this URL, or when the page needs a small read-only interaction "
+        "to reveal already-requested information. Not a discovery tool."
+    ),
+)
+async def browser_navigate_tool(
+    url: Annotated[str, Field(description="Exact URL to open.")],
+) -> str:
+    return await _browser("navigate", url=url)
+
+
+@mcp.tool(
+    name="browser_find",
+    title="Browser Find",
+    description=(
+        "Locate text or an element on the current page. This is the normal way to "
+        "find a target: it returns matching accessibility nodes and nearby context "
+        "far more cheaply than a full snapshot. Reuse the returned ref for the next "
+        "interaction instead of looking at the page again."
+    ),
+)
+async def browser_find_tool(
+    text: Annotated[str | None, Field(description="Case-insensitive substring to find.")] = None,
+    regex: Annotated[str | None, Field(description="Regular expression to find. Provide text or regex, not both.")] = None,
+) -> str:
+    return await _browser("find", text=text, regex=regex)
+
+
+@mcp.tool(
+    name="browser_snapshot",
+    title="Browser Snapshot",
+    description=(
+        "Capture the page's accessibility tree. Use only when a targeted find cannot "
+        "explain the page or produce a usable target. Prefer a small depth: it returns "
+        "a shallower but still valid tree, and a full-page snapshot can be fifty times "
+        "larger. Never snapshot merely to search for text find could locate."
+    ),
+)
+async def browser_snapshot_tool(
+    depth: Annotated[int | None, Field(description="Maximum tree depth. Omit for the configured default.")] = None,
+) -> str:
+    return await _browser("snapshot", depth=depth)
+
+
+@mcp.tool(
+    name="browser_click",
+    title="Browser Click",
+    description=(
+        "Click the element with this ref, taken from a prior find or snapshot. "
+        "Read-only interactions that reveal already-public content (pagination, "
+        "expanding a section, accepting a cookie banner) need no confirmation; any "
+        "real-world side effect does."
+    ),
+)
+async def browser_click_tool(
+    target: Annotated[str, Field(description="Element ref from a snapshot, such as 'e42'.")],
+) -> str:
+    return await _browser("click", target=target)
+
+
+@mcp.tool(
+    name="browser_type",
+    title="Browser Type",
+    description=(
+        "Type text into the element with this ref. Do not enter credentials or other "
+        "sensitive data, and confirm before submitting anything with a side effect."
+    ),
+)
+async def browser_type_tool(
+    target: Annotated[str, Field(description="Element ref from a snapshot, such as 'e42'.")],
+    text: Annotated[str, Field(description="Text to type.")],
+    submit: Annotated[bool, Field(description="Press Enter after typing.")] = False,
+) -> str:
+    return await _browser("type", target=target, text=text, submit=submit)
+
+
+@mcp.tool(
+    name="browser_wait_for",
+    title="Browser Wait For",
+    description=(
+        "Wait for text to appear or disappear, or for a fixed delay, when a page "
+        "needs time to render after an interaction."
+    ),
+)
+async def browser_wait_for_tool(
+    time: Annotated[float | None, Field(description="Seconds to wait.")] = None,
+    text: Annotated[str | None, Field(description="Text to wait for.")] = None,
+    text_gone: Annotated[str | None, Field(description="Text to wait to disappear.")] = None,
+) -> str:
+    return await _browser("wait_for", time_seconds=time, text=text, text_gone=text_gone)
+
+
+@mcp.tool(
+    name="browser_take_screenshot",
+    title="Browser Take Screenshot",
+    description=(
+        "Save a screenshot to a file and return its path, for when a visual check "
+        "genuinely matters. The image is never inlined into the conversation. Do not "
+        "use it to choose an interaction target; use find instead."
+    ),
+)
+async def browser_take_screenshot_tool(
+    full_page: Annotated[bool, Field(description="Capture the full scrollable page.")] = False,
+) -> str:
+    return await _browser("take_screenshot", full_page=full_page)
+
+
+@mcp.tool(
+    name="browser_tabs",
+    title="Browser Tabs",
+    description="List, select, open, or close browser tabs.",
+)
+async def browser_tabs_tool(
+    action: Annotated[str, Field(description="One of: list, new, select, close.")] = "list",
+    index: Annotated[int | None, Field(description="Tab index for select and close.")] = None,
+) -> str:
+    return await _browser("tabs", action=action, index=index)
+
+
+@mcp.tool(
+    name="browser_close",
+    title="Browser Close",
+    description=(
+        "Close the browser session. Call this when the current research task is "
+        "complete; do not leave a session open for speculative exploration."
+    ),
+)
+async def browser_close_tool() -> str:
+    return await _browser("close")
+
+
+def unregister_browser_tools_if_disabled() -> list[str]:
+    """Drop the browser tools from the schema when the backend is off.
+
+    They are registered by decorator at import time, so disabling has to
+    remove them rather than skip registration. A tool a client cannot see is
+    a tool it cannot be talked into calling, which is the same reason the
+    code-execution tools have no implementation here at all.
     """
-    from mcp.server.fastmcp.tools.base import Tool
-    from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase, FuncMetadata
-    from pydantic import ConfigDict
+    from tinysearch.services.browser_tool_service import browser_backend_enabled
 
-    from tinysearch.services import playwright_mcp_service as pw
-
-    config = load_tinysearch_config()
-    if not pw.browser_backend_enabled(config):
-        _log("browser_backend is 'off'; playwright browser tools not registered")
+    if browser_backend_enabled(load_tinysearch_config()):
         return []
-
-    class _PassthroughArgs(ArgModelBase):
-        """Forward validated-upstream arguments through without re-modelling them."""
-
-        model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
-
-        def model_dump_one_level(self) -> dict[str, Any]:
-            return dict(self.__pydantic_extra__ or {})
-
-    schemas = await pw.fetch_tool_schemas(config)
-    registered: list[str] = []
-    for upstream_name, schema in schemas.items():
-        public_name = pw.public_tool_name(upstream_name)
-
-        async def handler(_upstream: str = upstream_name, **arguments: Any) -> str:
-            _log(f"{pw.public_tool_name(_upstream)} called")
-            return await pw.get_client(load_tinysearch_config()).call(_upstream, arguments)
-
-        mcp._tool_manager._tools[public_name] = Tool(
-            fn=handler,
-            name=public_name,
-            title=public_name.replace("_", " ").title(),
-            description=pw.tool_description(upstream_name),
-            parameters=schema,
-            fn_metadata=FuncMetadata(arg_model=_PassthroughArgs),
-            is_async=True,
-            context_kwarg=None,
-            annotations=None,
-        )
-        registered.append(public_name)
-
-    _log(f"registered {len(registered)} playwright browser tools")
-    return registered
-
-
-def _register_browser_tools_blocking() -> None:
-    """Register browser tools before the transport starts serving.
-
-    Failure is non-fatal: TinySearch's search and scrape tools must keep
-    working on a host with no Node.js runtime installed.
-    """
-    import anyio
-
-    try:
-        anyio.run(register_browser_tools)
-    except Exception as exc:  # noqa: BLE001 - browser backend is optional
-        _log(f"playwright browser tools unavailable: {exc}")
+    removed = [name for name in mcp._tool_manager._tools if name.startswith("browser_")]
+    for name in removed:
+        del mcp._tool_manager._tools[name]
+    _log(f"browser_backend is 'off'; removed {len(removed)} browser tools")
+    return removed
 
 
 def main() -> None:
     _enable_traceback_dump()
     configure_from_environment()
-    _register_browser_tools_blocking()
+    unregister_browser_tools_if_disabled()
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError(

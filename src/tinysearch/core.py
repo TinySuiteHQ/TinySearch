@@ -29,10 +29,10 @@ get_current_datetime = current_datetime_payload
 
 
 async def close_browser_sessions() -> None:
-    """Stop the managed Playwright MCP child during a server's graceful shutdown."""
-    from tinysearch.services.playwright_mcp_service import shutdown_client
+    """Close the live browser during a server's graceful shutdown."""
+    from tinysearch.services.browser_tool_service import shutdown_session
 
-    await shutdown_client()
+    await shutdown_session()
 
 
 def _resolve_config(config: ConfigInput | None) -> dict[str, Any]:

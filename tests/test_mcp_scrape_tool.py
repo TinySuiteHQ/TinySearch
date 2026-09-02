@@ -36,8 +36,14 @@ def _fn(coro):
 class ScrapeUrlsToolTests(unittest.IsolatedAsyncioTestCase):
     def test_mcp_exposes_only_batch_scrape_tool(self) -> None:
         self.assertEqual(
-            set(mcp._tool_manager._tools),
+            {name for name in mcp._tool_manager._tools if not name.startswith("browser_")},
             {"get_current_datetime", "search", "scrape_urls"},
+        )
+        self.assertEqual(
+            {name for name in mcp._tool_manager._tools if name.startswith("browser_")},
+            {f"browser_{name}" for name in ("navigate", "find", "snapshot", "click",
+                                            "type", "wait_for", "take_screenshot",
+                                            "tabs", "close")},
         )
         self.assertEqual(list(signature(_fn(scrape_urls_tool)).parameters), ["items"])
 

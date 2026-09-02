@@ -164,13 +164,13 @@ uvx --from "tinysuite-search[server]" tinysearch setup
 Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 [installation guide](https://tinysuite.dev/docs/tinysearch/).
 
-## Four MCP tools
+## The MCP tools
 
 | Tool | Use it when |
 | --- | --- |
 | `search(items)` | You need fast, backend-ordered discovery without crawling or reranking; batch independent subquestions when useful |
 | `scrape_urls(items)` | You know one to five pages; each item may use `*` for its configured clean page-order token budget |
-| `playwright_browser_*` | A page needs interaction before it can be read; opt-in browser tools, off by default (see [Browser automation](#browser-automation)) |
+| `browser_*` (nine tools) | A page needs interaction before it can be read; see [Browser automation](#browser-automation) |
 | `get_current_datetime()` | A question depends on the current date or time |
 
 TinySearch deliberately stays focused. It is a retrieval layer, not another
@@ -212,9 +212,9 @@ or transform the evidence.
    configured token budget.
 3. Supply a focused item query when TinySearch should chunk and hybrid-rank
    that page before returning evidence.
-4. The `playwright_browser_*` tools step in only when `scrape_urls` can't
-   reach the content because it needs interaction. They are off by default;
-   see [Browser automation](#browser-automation).
+4. The `browser_*` tools step in only when `scrape_urls` can't reach the
+   content because it needs interaction. See
+   [Browser automation](#browser-automation).
 
 ## Python library
 
@@ -318,49 +318,53 @@ Full key reference, SearXNG JSON-output setup, and Compose details live in the
 
 `scrape_urls` is a static fetch. It cannot see content that JavaScript renders
 after load, content behind a cookie interstitial, a "load more" control, or a
-client-side search UI. For those pages TinySearch can expose a real browser.
+client-side search UI. For those pages TinySearch drives a real browser.
 
-TinySearch does not implement browser automation itself. It supervises
-Microsoft's [`@playwright/mcp`](https://github.com/microsoft/playwright-mcp) as
-a child process and re-exports a narrow subset of its tools. Enable it in the
-config file (Node.js 18+ must be on `PATH`):
+This costs nothing extra to install. TinySearch already depends on Playwright
+through Crawl4AI and already installs its Chromium for scraping, so the browser
+tools reuse the same driver and the same browser: no second runtime, no second
+browser, no child process.
 
-```json
-{
-  "browser_backend": "playwright_mcp",
-  "browser_storage_state_path": "/data/browser-state.json"
-}
+Nine tools: `browser_navigate`, `browser_find`, `browser_snapshot`,
+`browser_click`, `browser_type`, `browser_wait_for`,
+`browser_take_screenshot`, `browser_tabs`, and `browser_close`.
+
+The model reads a compact accessibility tree where each node carries a stable
+ref, names one, and TinySearch acts on it with genuine browser input events:
+
+```
+browser_navigate  -> "- button \"Accept all\" [ref=e79]"
+browser_click     -> target: "e79"
 ```
 
-Nine tools are exposed: `playwright_browser_navigate`, `_find`, `_snapshot`,
-`_click`, `_type`, `_wait_for`, `_take_screenshot`, `_tabs`, and `_close`.
-Prefer `_find` over `_snapshot`; it returns matching accessibility-tree nodes
-and nearby context far more cheaply than a full page snapshot.
+Nothing synthesizes DOM events or invents CSS selectors, and `click`/`type`
+accept only a ref the model actually observed, never a raw selector.
 
 Three deliberate choices:
 
-- **The allowlist is structural.** `browser_evaluate` and
-  `browser_run_code_unsafe` are never registered, so they are absent from the
-  tool schema rather than discouraged by prompt. A page that injects
-  instructions into its own text has no arbitrary-code tool to reach for. The
-  same holds for `fill_form`, `file_upload`, `drag`, and `drop`.
-- **Responses are capped.** Output above `browser_response_char_budget` is
-  written to `browser_output_dir` and replaced by a head plus that path.
-  Screenshots always go to disk, never inline into the conversation.
-- **Cookies persist, sessions don't.** Sessions run `--isolated` and seed from
-  `browser_storage_state_path`, so a consent banner accepted once is not paid
-  for on every later navigation, while no browser profile lock is taken and
-  concurrent clients do not conflict. That file is a server-side path; it is
-  never exposed to a model or over HTTP.
+- **No tool can execute code.** There is no `evaluate` tool, and none that
+  fills forms, uploads, or drags. A page that injects instructions into its own
+  rendered text has nothing dangerous to reach for, because the capability is
+  absent rather than discouraged.
+- **Depth is the token lever.** `browser_snapshot` takes a `depth`, returning a
+  shallower but still valid tree instead of a truncated string. On a large page
+  that is ~700 characters versus ~33,000. Prefer `browser_find`, which returns
+  only matching nodes and their context.
+- **Cookies persist, sessions don't.** Set `browser_storage_state_path` and a
+  consent banner accepted once is not paid for on every later navigation.
+  Sessions stay isolated, so no browser profile lock is taken and concurrent
+  clients do not conflict. That file is a server-side path, never exposed to a
+  model or over HTTP.
 
-Upstream is version-pinned. Argument schemas are read from the running child
-and re-exported verbatim, so an argument rename on a version bump is inherited
-rather than silently diverging.
+Screenshots are always written to disk and returned as a path, never inlined.
+
+To turn the tools off entirely, set `"browser_backend": "off"`; they are then
+removed from the tool list rather than merely refusing to run.
 
 ### External browser over CDP
 
 To drive a browser you operate separately, set its Chrome DevTools Protocol
-endpoint:
+endpoint. It is used by **both** the scrape pipeline and the browser tools:
 
 ```json
 {
