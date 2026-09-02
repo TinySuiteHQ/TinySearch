@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import sys
 from contextlib import asynccontextmanager
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
@@ -16,7 +16,16 @@ from tinysearch.services.tinysearch_config_service import (
 from tinysearch.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
 
-_OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({"browser_cdp_url"})
+# Settings that let a caller reach outside the HTTP surface: an external
+# browser endpoint, a cookie/storage file, a directory TinySearch writes
+# into, and the switch that spawns the Playwright child process. All are
+# operator decisions made at startup, never over the API.
+_OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({
+    "browser_cdp_url",
+    "browser_backend",
+    "browser_storage_state_path",
+    "browser_output_dir",
+})
 
 
 @asynccontextmanager
@@ -25,6 +34,7 @@ async def _lifespan(_app: FastAPI):
     try:
         yield
     finally:
+        await core.close_browser_sessions()
         shutdown_telemetry()
 
 
@@ -54,35 +64,6 @@ class ScrapeBatchRequest(BaseModel):
 
     items: list[ScrapeBatchItem] = Field(..., min_length=1, max_length=5)
     max_tokens: int = Field(4000, ge=1)
-
-
-class BrowseAction(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    action: Literal["click", "type", "scroll", "wait"]
-    selector: str | None = None
-    text: str | None = None
-    submit: bool | None = None
-    to: Literal["top", "bottom"] | None = None
-    amount: int | None = None
-    seconds: float | None = None
-    timeout_seconds: float | None = None
-
-
-class BrowseRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    url: HttpUrl | None = None
-    actions: list[BrowseAction] = Field(default_factory=list)
-    query: str | None = None
-    session_id: str | None = None
-    max_tokens: int = Field(4000, ge=1)
-
-    @model_validator(mode="after")
-    def _require_url_or_session(self) -> "BrowseRequest":
-        if self.url is None and not self.session_id:
-            raise ValueError("provide url (to open a session) or an existing session_id")
-        return self
 
 
 class SearchItem(BaseModel):
@@ -129,7 +110,7 @@ async def get_config_endpoint() -> dict[str, Any]:
     return {
         key: (
             "***"
-            if (key == "browser_cdp_url" and value)
+            if (key in ("browser_cdp_url", "browser_storage_state_path") and value)
             or any(marker in key.lower() for marker in ("secret", "token", "api_key"))
             else value
         )
@@ -171,10 +152,10 @@ async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
             detail={
                 "code": "operator_managed_config",
                 "message": (
-                    "browser_cdp_url cannot be changed over HTTP. Configure it "
-                    "at startup with TINYSEARCH_BROWSER_CDP_URL or in the file "
-                    "selected by TINYSEARCH_CONFIG_PATH, then restart TinySearch. "
-                    "Omit browser_cdp_url when updating other settings."
+                    f"{', '.join(operator_managed_fields)} cannot be changed over "
+                    "HTTP. Configure these at startup in the file selected by "
+                    "TINYSEARCH_CONFIG_PATH, then restart TinySearch. Omit them "
+                    "when updating other settings."
                 ),
                 "fields": operator_managed_fields,
             },
@@ -198,23 +179,6 @@ async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
     )
 
 
-@app.post("/browse")
-async def browse_endpoint(request: BrowseRequest) -> dict[str, Any]:
-    """Interact with a live browser page (click/type/scroll/wait) and return it scraped.
-
-    Call with just `url` to open a session and observe the rendered page --
-    the response's `stats.session_id` names it. Call again with that
-    `session_id` and `actions` to act on the same page; omit `url` on that
-    follow-up call to keep reusing the session's current page.
-    """
-    return await core.browse(
-        str(request.url) if request.url is not None else None,
-        [action.model_dump(exclude_none=True) for action in request.actions],
-        query=request.query,
-        session_id=request.session_id,
-        max_tokens=request.max_tokens,
-        config=load_tinysearch_config(),
-    )
 
 
 @app.post("/search")

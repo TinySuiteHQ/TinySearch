@@ -170,7 +170,7 @@ Prefer Docker, a remote MCP endpoint, or a source checkout? Follow the
 | --- | --- |
 | `search(items)` | You need fast, backend-ordered discovery without crawling or reranking; batch independent subquestions when useful |
 | `scrape_urls(items)` | You know one to five pages; each item may use `*` for its configured clean page-order token budget |
-| `browse(url, actions, session_id)` | A page needs a click, type, scroll, or wait before it can be read; observe first with no actions, then act with the returned `session_id` |
+| `browse(url, actions, session_id, control_revision)` | A page needs interaction before it can be read; observe first, then act using its returned grounded control refs |
 | `get_current_datetime()` | A question depends on the current date or time |
 
 TinySearch deliberately stays focused. It is a retrieval layer, not another
@@ -214,8 +214,11 @@ or transform the evidence.
    that page before returning evidence.
 4. `browse` steps in only when `scrape_urls` can't reach the content because
    it needs interaction. Call it with just a `url` to open and observe the
-   rendered page; call it again with the returned `session_id` and one or
-   more `click`/`type`/`scroll`/`wait` actions to act on that same live page.
+   rendered page and its bounded list of interactive controls; call it again
+   with the returned `session_id`, `control_revision`, and a control `ref` for
+   `click`/`type`/`scroll`/`wait` actions. TinySearch keeps the actual selectors
+   server-side, so agents act only on controls they observed rather than guessing
+   CSS selectors.
    The session stays open, idle, for a few minutes, then closes on its own.
 
 ## Python library

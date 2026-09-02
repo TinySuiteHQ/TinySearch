@@ -1,10 +1,9 @@
 from tinysearch.config import TinySearchConfig
-from tinysearch.core import browse, get_current_datetime, scrape_urls, search
+from tinysearch.core import get_current_datetime, scrape_urls, search
 from tinysearch.prompts import to_prompt
 
 __all__ = [
     "TinySearchConfig",
-    "browse",
     "get_current_datetime",
     "search",
     "scrape_urls",

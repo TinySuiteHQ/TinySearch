@@ -62,12 +62,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "search_backend_fallback": True,
     "ddgs_timeout_seconds": 20.0,
     "ddgs_backend": "auto",
+    "browser_backend": "off",
     "browser_cdp_url": "",
-    "browser_max_actions": 8,
-    "browser_max_sessions": 4,
-    "browser_session_idle_seconds": 300.0,
+    "browser_storage_state_path": "",
+    "browser_output_dir": "",
+    "browser_response_char_budget": 20000,
+    "browser_idle_shutdown_seconds": 300.0,
     "browser_action_timeout_seconds": 10.0,
 }
+
+SUPPORTED_BROWSER_BACKENDS = ("off", "playwright_mcp")
 
 _INT_FIELDS = {
     "search_max_results",
@@ -83,8 +87,7 @@ _INT_FIELDS = {
     "crawl_overlap_tokens",
     "crawl_max_page_tokens",
     "dense_document_embed_batch_size",
-    "browser_max_actions",
-    "browser_max_sessions",
+    "browser_response_char_budget",
 }
 _FLOAT_FIELDS = {
     "chunk_rrf_cutoff",
@@ -93,7 +96,7 @@ _FLOAT_FIELDS = {
     "crawl_pruning_threshold",
     "embedding_timeout_seconds",
     "ddgs_timeout_seconds",
-    "browser_session_idle_seconds",
+    "browser_idle_shutdown_seconds",
     "browser_action_timeout_seconds",
 }
 
@@ -115,16 +118,18 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     for key in (
         "search_max_concurrent_items",
         "scrape_max_link_tokens",
-        "browser_max_actions",
-        "browser_max_sessions",
     ):
         if config[key] <= 0:
             raise ValueError(f"tinysearch config {key} must be positive")
     for key in _FLOAT_FIELDS:
         config[key] = float(config[key])
-    for key in ("browser_session_idle_seconds", "browser_action_timeout_seconds"):
+    for key in ("browser_idle_shutdown_seconds", "browser_action_timeout_seconds"):
         if config[key] <= 0:
             raise ValueError(f"tinysearch config {key} must be positive")
+    if config["browser_response_char_budget"] < 0:
+        raise ValueError(
+            "tinysearch config browser_response_char_budget must be zero (uncapped) or positive"
+        )
     raw_timeout = config.get("pipeline_timeout_seconds")
     config["pipeline_timeout_seconds"] = (
         float(raw_timeout) if raw_timeout is not None else None
@@ -138,10 +143,21 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "crawl_fit_markdown_mode",
         "crawl_bm25_language",
         "ddgs_backend",
+        "browser_backend",
         "browser_cdp_url",
+        "browser_storage_state_path",
+        "browser_output_dir",
     ):
         if config.get(key) is not None:
             config[key] = str(config[key])
+
+    browser_backend = config["browser_backend"].strip().lower()
+    if browser_backend not in SUPPORTED_BROWSER_BACKENDS:
+        raise ValueError(
+            "tinysearch config browser_backend must be one of "
+            f"{list(SUPPORTED_BROWSER_BACKENDS)}"
+        )
+    config["browser_backend"] = browser_backend
 
     browser_cdp_url = config["browser_cdp_url"].strip()
     if browser_cdp_url:

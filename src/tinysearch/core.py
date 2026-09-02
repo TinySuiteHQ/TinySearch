@@ -13,26 +13,26 @@ import asyncio
 import contextlib
 import time
 from collections.abc import Mapping, Sequence
-from functools import partial
 from typing import Any
 
 from tinysearch.config import ConfigInput, resolve_config
 from tinysearch.pipelines.scrape import run_scrape_pipeline
 from tinysearch.results import public_chunk, public_link, result_envelope
-from tinysearch.services.browser_interaction_service import interact_and_extract
-from tinysearch.services.browser_session_service import SessionExpiredError, get_registry
 from tinysearch.services.current_datetime_service import current_datetime_payload
 from tinysearch.services.embedding_service import normalize_embedding_backend
-from tinysearch.services.scrape_service import (
-    DEFAULT_SCRAPE_MAX_TOKENS,
-    FetchFailedError,
-    FetchTimeoutError,
-)
+from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
 from tinysearch.services.site_crawl_service import create_browser_crawler, is_document_url
 from tinysearch.services.web_search_service import search_batch_with_metadata
 from tinysearch.telemetry import span_scope
 
 get_current_datetime = current_datetime_payload
+
+
+async def close_browser_sessions() -> None:
+    """Stop the managed Playwright MCP child during a server's graceful shutdown."""
+    from tinysearch.services.playwright_mcp_service import shutdown_client
+
+    await shutdown_client()
 
 
 def _resolve_config(config: ConfigInput | None) -> dict[str, Any]:
@@ -321,133 +321,3 @@ async def scrape_urls(
             "status": status,
             "results": results,
         }
-
-
-async def browse(
-    url: str | None = None,
-    actions: Sequence[Mapping[str, Any]] | None = None,
-    *,
-    query: str | None = None,
-    session_id: str | None = None,
-    max_tokens: int = DEFAULT_SCRAPE_MAX_TOKENS,
-    config: ConfigInput | None = None,
-) -> dict[str, Any]:
-    """Interact with a live browser page and return it through the scrape pipeline.
-
-    Call with just ``url`` (no ``actions``) to open a page and observe it --
-    the response's ``stats.session_id`` names the live page. Pass that
-    ``session_id`` back with ``actions`` (``click``/``type``/``scroll``/
-    ``wait``) to act on the *same* page and see the result; omit ``url`` on
-    those follow-up calls to keep reusing the session's current page. The
-    session stays open, idle, for a few minutes so a caller can look before
-    it clicks -- this is not a general persistent/authenticated session.
-    """
-    normalized_actions = list(actions or [])
-    if session_id is None and not (url or "").strip():
-        raise ValueError("browse requires a url (to open a session) or an existing session_id")
-    if session_id is None and is_document_url(url or ""):
-        raise ValueError("browse does not support PDF/DOCX documents; use scrape_urls instead")
-    if max_tokens <= 0:
-        raise ValueError("max_tokens must be positive")
-
-    resolved = _resolve_config(config)
-    max_actions = int(resolved["browser_max_actions"])
-    if len(normalized_actions) > max_actions:
-        raise ValueError(f"browse accepts at most {max_actions} actions per call")
-
-    with span_scope(
-        "tinysearch.browse",
-        attributes={
-            "tinysearch.browse.action.count": len(normalized_actions),
-            "tinysearch.browse.new_session": session_id is None,
-        },
-        operation="browse",
-        record_operation_metric=True,
-    ) as telemetry:
-        started = time.monotonic()
-        if (query or "").strip() not in {"", "*"}:
-            await _ensure_local_bundle_for_config(resolved)
-        await _ensure_browser_bundle(resolved)
-
-        registry = get_registry()
-        idle_seconds = float(resolved["browser_session_idle_seconds"])
-        navigate = session_id is None
-        if navigate:
-            session = await registry.create(
-                resolved,
-                max_sessions=int(resolved["browser_max_sessions"]),
-                idle_seconds=idle_seconds,
-            )
-            target_url = url
-        else:
-            try:
-                session = await registry.get(session_id, idle_seconds=idle_seconds)
-            except SessionExpiredError as exc:
-                telemetry.complete(outcome="error", error_type=type(exc).__name__)
-                raise
-            target_url = (url or "").strip() or session.current_url
-            if not target_url:
-                raise ValueError("browse requires url when the session has no prior url")
-
-        crawl_fn = partial(
-            interact_and_extract,
-            actions=normalized_actions,
-            crawl4ai_session_id=session.session_id,
-            navigate=navigate,
-            default_action_timeout_seconds=float(resolved["browser_action_timeout_seconds"]),
-        )
-        try:
-            scrape_result = await run_scrape_pipeline(
-                target_url,
-                query,
-                max_tokens=max_tokens,
-                include_metadata=True,
-                config=resolved,
-                crawl_fn=crawl_fn,
-                crawler=session.crawler,
-            )
-        except Exception as exc:
-            telemetry.complete(outcome="error", error_type=type(exc).__name__)
-            if isinstance(exc, (FetchFailedError, FetchTimeoutError)):
-                await registry.close(session.session_id)
-            raise
-        session.current_url = scrape_result.url
-        session.touch()
-
-        source = {
-            "id": "1",
-            "title": scrape_result.title,
-            "url": scrape_result.url,
-            "metadata": scrape_result.metadata or {},
-            "chunks": [
-                public_chunk(chunk, rank=rank)
-                for rank, chunk in enumerate(scrape_result.chunks, start=1)
-            ],
-            "links": [
-                public_link(link, rank=rank)
-                for rank, link in enumerate(scrape_result.links, start=1)
-            ],
-        }
-        telemetry.complete(
-            result_count=1,
-            attributes={
-                "tinysearch.chunk.count": len(scrape_result.chunks),
-                "tinysearch.content.token.count": scrape_result.content_tokens,
-            },
-        )
-        return result_envelope(
-            operation="browse",
-            status="ok",
-            query=scrape_result.query,
-            retrieved_at=scrape_result.retrieved_at,
-            sources=[source],
-            stats={
-                "requested_url": target_url,
-                "actions_executed": len(normalized_actions),
-                "content_tokens": scrape_result.content_tokens,
-                "truncated": scrape_result.truncated,
-                "session_id": session.session_id,
-                "session_expires_in_seconds": round(idle_seconds),
-                "latency_ms": round((time.monotonic() - started) * 1000),
-            },
-        )

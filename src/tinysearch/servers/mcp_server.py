@@ -159,7 +159,7 @@ This MCP server exposes four tools:
 1. get_current_datetime()
 2. search(items)
 3. scrape_urls(items)
-4. browse(url, actions, query, session_id)
+4. browse(url, actions, query, session_id, control_revision)
 
 Before calling search for time-sensitive questions, or if you need to add
 year/month/day context to a query, call get_current_datetime() first to orient
@@ -189,8 +189,8 @@ it requires clicking, typing, scrolling, or waiting for content to appear
 (e.g. dismissing a banner, submitting a search box, paging through results).
 It is an observe-then-act primitive, not a one-shot batch call: call it
 first with just a url and no actions to open the page and see it rendered;
-its response includes stats.session_id. Then call it again with that
-session_id and one or more actions (based on what you actually saw) to act
+its response includes session_id and control_revision. Then call it again with that
+session_id, control_revision, and one or more ref-based actions to act
 on the *same* live page and see the updated result -- omit url on this
 follow-up call. The session stays open, idle, for a few minutes so you can
 keep interacting; it is not a persistent or authenticated session, and it
@@ -309,64 +309,81 @@ async def scrape_urls_tool(
     return format_url_grounded_answers(results=result["results"])
 
 
-@mcp.tool(
-    name="browse",
-    title="Browse",
-    description=(
-        "Interact with a live browser page for content scrape_urls cannot reach "
-        "(click, type, scroll, wait). Call first with url only to open and observe "
-        "the rendered page; its session_id is returned so a follow-up call can pass "
-        "session_id with actions to act on that same page and see the result. "
-        "One URL per session, not a batch."
-    ),
-)
-async def browse_tool(
-    url: Annotated[
-        str | None,
-        Field(description="Page to open. Required unless session_id is given."),
-    ] = None,
-    actions: Annotated[
-        list[dict[str, Any]] | None,
-        Field(
-            description=(
-                "Up to a few actions to run in order on the page: "
-                "{action: 'click', selector} | "
-                "{action: 'type', selector, text, submit?} | "
-                "{action: 'scroll', selector} or {action:'scroll', to:'top'|'bottom'} "
-                "or {action:'scroll', amount:<px>} | "
-                "{action: 'wait', seconds} or {action:'wait', selector, timeout_seconds}. "
-                "Omit or leave empty to just observe the current page."
-            )
-        ),
-    ] = None,
-    query: Annotated[
-        str | None,
-        Field(description="Focused query to rank content chunks; omit or '*' for page-order content."),
-    ] = None,
-    session_id: Annotated[
-        str | None,
-        Field(description="A session_id from a prior browse() call, to act on that same live page."),
-    ] = None,
-) -> str:
-    config = load_tinysearch_config()
-    action_count = len(actions or [])
-    _log(f"browse called url={bool(url)} session_id={bool(session_id)} actions={action_count}")
-    result = await core.browse(
-        url,
-        actions,
-        query=query,
-        session_id=session_id,
-        max_tokens=config["scrape_max_tokens"],
-        config=config,
-    )
-    from tinysearch.services.grounded_prompt_service import format_browse_result
+async def register_browser_tools() -> list[str]:
+    """Register the allowlisted Playwright tools using the child's own schemas.
 
-    return format_browse_result(result=result)
+    Argument schemas are fetched from the running `@playwright/mcp` child and
+    re-exported verbatim rather than restated in Python signatures, so an
+    argument rename on a version bump is inherited instead of silently
+    diverging. Registration therefore requires briefly starting the child.
+
+    Tools outside `exposed_tool_names()` -- notably `browser_evaluate` and
+    `browser_run_code_unsafe` -- are never registered at all. A page cannot
+    talk a model into calling a tool that is absent from the schema.
+    """
+    from mcp.server.fastmcp.tools.base import Tool
+    from mcp.server.fastmcp.utilities.func_metadata import ArgModelBase, FuncMetadata
+    from pydantic import ConfigDict
+
+    from tinysearch.services import playwright_mcp_service as pw
+
+    config = load_tinysearch_config()
+    if not pw.browser_backend_enabled(config):
+        _log("browser_backend is 'off'; playwright browser tools not registered")
+        return []
+
+    class _PassthroughArgs(ArgModelBase):
+        """Forward validated-upstream arguments through without re-modelling them."""
+
+        model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+        def model_dump_one_level(self) -> dict[str, Any]:
+            return dict(self.__pydantic_extra__ or {})
+
+    schemas = await pw.fetch_tool_schemas(config)
+    registered: list[str] = []
+    for upstream_name, schema in schemas.items():
+        public_name = pw.public_tool_name(upstream_name)
+
+        async def handler(_upstream: str = upstream_name, **arguments: Any) -> str:
+            _log(f"{pw.public_tool_name(_upstream)} called")
+            return await pw.get_client(load_tinysearch_config()).call(_upstream, arguments)
+
+        mcp._tool_manager._tools[public_name] = Tool(
+            fn=handler,
+            name=public_name,
+            title=public_name.replace("_", " ").title(),
+            description=pw.tool_description(upstream_name),
+            parameters=schema,
+            fn_metadata=FuncMetadata(arg_model=_PassthroughArgs),
+            is_async=True,
+            context_kwarg=None,
+            annotations=None,
+        )
+        registered.append(public_name)
+
+    _log(f"registered {len(registered)} playwright browser tools")
+    return registered
+
+
+def _register_browser_tools_blocking() -> None:
+    """Register browser tools before the transport starts serving.
+
+    Failure is non-fatal: TinySearch's search and scrape tools must keep
+    working on a host with no Node.js runtime installed.
+    """
+    import anyio
+
+    try:
+        anyio.run(register_browser_tools)
+    except Exception as exc:  # noqa: BLE001 - browser backend is optional
+        _log(f"playwright browser tools unavailable: {exc}")
 
 
 def main() -> None:
     _enable_traceback_dump()
     configure_from_environment()
+    _register_browser_tools_blocking()
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise ValueError(
@@ -381,6 +398,9 @@ def main() -> None:
         else:
             mcp.run(transport=transport)
     finally:
+        import anyio
+
+        anyio.run(core.close_browser_sessions)
         shutdown_telemetry()
 
 
