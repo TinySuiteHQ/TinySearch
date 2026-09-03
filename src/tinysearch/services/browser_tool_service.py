@@ -48,8 +48,7 @@ MINIMUM_PLAYWRIGHT_VERSION = "1.59"
 # untrusted input, and it must not be able to reach a tool that runs code.
 TOOL_NAMES = (
     "navigate",
-    "find",
-    "snapshot",
+    "look",
     "click",
     "type",
     "wait_for",
@@ -58,16 +57,21 @@ TOOL_NAMES = (
     "close",
 )
 
+# Arguments that shape what a call *returns* rather than what it does. Every
+# operation handing back a view of the page accepts them, because finding is
+# not a sibling of clicking -- it is a filter on the result. Without that, an
+# agent pays for a whole tree after each action and then pays again to narrow
+# it; with it, a click that reveals a table can return only the table.
+VIEW_ARGUMENTS = ("find", "depth")
+
 # MCP has no way to group or nest tools: `tools/list` is flat, and every
-# schema is re-sent to the model on every request. So the nine operations are
-# published as three tools. `navigate` and `find` stay first-class -- they are
-# the two a model reaches for constantly, and they are distinct intents that
-# earn their own descriptions -- while the remaining seven are one page
-# session's lifecycle and fold behind `browser_act(action=...)`. Measured on
-# the real schemas, that takes the whole server from 1,658 to 1,308 tokens
-# (12 tools to 6).
+# schema is re-sent to the model on every request. So the eight operations are
+# published as two tools. `navigate` stays first-class -- it is the entry
+# point, the only operation that does not need a page already open, and the
+# one a model reaches for first -- while the remaining seven are one page
+# session's lifecycle and fold behind `browser_act(action=...)`.
 ACT_ACTIONS = (
-    "snapshot",
+    "look",
     "click",
     "type",
     "wait_for",
@@ -81,12 +85,12 @@ ACT_ACTIONS = (
 # enforced here and reported as a precise error instead of a TypeError.
 _ACT_PARAMETERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     # action: (accepted, required)
-    "snapshot": (("depth",), ()),
-    "click": (("target",), ("target",)),
-    "type": (("target", "text", "submit"), ("target", "text")),
-    "wait_for": (("time_seconds", "text", "text_gone"), ()),
+    "look": (VIEW_ARGUMENTS, ()),
+    "click": (("target", *VIEW_ARGUMENTS), ("target",)),
+    "type": (("target", "text", "submit", *VIEW_ARGUMENTS), ("target", "text")),
+    "wait_for": (("time_seconds", "text", "text_gone", *VIEW_ARGUMENTS), ()),
     "take_screenshot": (("full_page",), ()),
-    "tabs": (("action", "index"), ()),
+    "tabs": (("action", "index", *VIEW_ARGUMENTS), ()),
     "close": ((), ()),
 }
 
@@ -173,16 +177,94 @@ def _validate_ref(target: str) -> str:
 def cap(text: str, char_budget: int) -> str:
     """Trim a response that outgrew its budget, and say how to ask for less.
 
-    `depth` is the better lever, so the message points at it rather than
-    silently swallowing the rest of the page.
+    `find` and `depth` are the better levers, so the message points at them
+    rather than silently swallowing the rest of the page.
     """
     if char_budget <= 0 or len(text) <= char_budget:
         return text
     return (
         text[:char_budget]
         + f"\n\n[tinysearch: truncated at {char_budget} of {len(text)} characters. "
-        "Use find to locate a specific element, or snapshot with a smaller depth.]"
+        "Pass find= to return only the matching nodes, or a smaller depth.]"
     )
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _record_bounds(lines: list[str], index: int, max_lines: int = 30) -> tuple[int, int]:
+    """Grow a match outward to its enclosing record instead of a fixed window.
+
+    An aria-snapshot nests each record (one video, one result row) several
+    levels deep -- a heading and the views/date a few fields below it share a
+    common ancestor well above the heading's immediate parent, so a fixed
+    +/-2 line window around the heading cuts the date off entirely. Climbing
+    to successive ancestors and taking each one's whole subtree, as long as
+    it still fits `max_lines`, finds that common ancestor without knowing
+    anything about the page: the shared list container (every sibling
+    record at once) blows the budget and stops the climb one level below
+    it, which is the record boundary.
+    """
+    best = max(0, index - 2), min(len(lines), index + 3)
+    root = index
+    indent = _indent(lines[root])
+    while True:
+        # Search from the current root, not the padded window -- starting
+        # from the fallback's edge would skip straight past the true
+        # immediate parent whenever it falls inside that +/-2 padding.
+        parent = root - 1
+        while parent >= 0 and _indent(lines[parent]) >= indent:
+            parent -= 1
+        if parent < 0:
+            return best
+        parent_indent = _indent(lines[parent])
+        subtree_end = parent + 1
+        while subtree_end < len(lines) and _indent(lines[subtree_end]) > parent_indent:
+            subtree_end += 1
+        if subtree_end - parent > max_lines:
+            return best
+        best = (parent, subtree_end)
+        root, indent = parent, parent_indent
+
+
+def filter_snapshot(snapshot: str, find: str | None) -> str | None:
+    """Reduce a snapshot to the nodes matching `find`, with surrounding context.
+
+    `find` is tried as a regular expression first, so alternation and other
+    patterns work without a second parameter to remember or a "no matches"
+    dead end when a model reaches for `a|b` syntax on the wrong argument.
+    Text that fails to compile (an unescaped `[` or a bare `*`) falls back to
+    a literal, case-insensitive substring search instead of erroring, so
+    plain text never needs escaping.
+
+    Returns None when no filter was asked for, which is how a caller tells
+    "show me the whole tree" apart from "nothing matched" -- the second is a
+    real answer about the page and must not be mistaken for the first.
+    """
+    if not find:
+        return None
+
+    lines = snapshot.splitlines()
+    try:
+        search = re.compile(find, re.IGNORECASE).search
+    except re.error:
+        lowered = find.lower()
+        search = lambda line: lowered in line.lower()  # noqa: E731
+
+    blocks: list[str] = []
+    covered: list[tuple[int, int]] = []
+    for index, line in enumerate(lines):
+        if not search(line):
+            continue
+        if any(start <= index < end for start, end in covered):
+            continue
+        start, end = _record_bounds(lines, index)
+        covered.append((start, end))
+        blocks.append("\n".join(lines[start:end]))
+    if not blocks:
+        return "No matches."
+    return f"Found {len(blocks)} matches:\n\n" + "\n\n----\n\n".join(blocks)
 
 
 class BrowserSession:
@@ -306,67 +388,81 @@ class BrowserSession:
             title = ""
         return f"- Page URL: {page.url}\n- Page Title: {title}"
 
-    async def _observation(self, depth: int | None = None) -> str:
-        return f"{await self._page_header()}\n\n### Snapshot\n{await self._snapshot(depth)}"
+    async def _observation(
+        self,
+        depth: int | None = None,
+        find: str | None = None,
+    ) -> str:
+        """Return the page view every action hands back, narrowed if asked.
 
-    # --- the nine tools ---------------------------------------------------
+        Filtering here rather than in a separate tool is what lets one call
+        both act and report: the snapshot is taken once either way, so the
+        narrow form costs strictly less than the tree it replaces.
+        """
+        header = await self._page_header()
+        snapshot = await self._snapshot(depth)
+        matches = filter_snapshot(snapshot, find)
+        if matches is not None:
+            return f"{header}\n\n{matches}"
+        return f"{header}\n\n### Snapshot\n{snapshot}"
 
-    async def navigate(self, url: str) -> str:
+    # --- the eight operations ---------------------------------------------
+
+    async def navigate(
+        self,
+        url: str,
+        depth: int | None = None,
+        find: str | None = None,
+    ) -> str:
         page = await self.page()
         await page.goto(url, wait_until="domcontentloaded")
-        return await self._observation()
+        return await self._observation(depth, find)
 
-    async def find(self, text: str | None = None, regex: str | None = None) -> str:
-        """Locate nodes by text, returning matches with their surrounding context.
+    async def look(
+        self,
+        depth: int | None = None,
+        find: str | None = None,
+    ) -> str:
+        """Read the current page without touching it.
 
-        This is the cheap way to get a ref: on a large page it returns a few
-        lines where a full snapshot would return tens of thousands.
+        With `find` this is the cheap way to get a ref -- on a large page a
+        few lines where the whole tree would be tens of thousands. Without
+        one it is the full snapshot, for when no filter can name the target.
         """
-        if bool(text) == bool(regex):
-            raise BrowserToolError("provide exactly one of text or regex")
-        snapshot = await self._snapshot(depth=None)
-        lines = snapshot.splitlines()
-        if regex:
-            try:
-                pattern = re.compile(regex)
-            except re.error as exc:
-                raise BrowserToolError(f"invalid regex: {exc}") from exc
-        else:
-            lowered = (text or "").lower()
+        return await self._observation(depth, find)
 
-        blocks: list[str] = []
-        for index, line in enumerate(lines):
-            hit = pattern.search(line) if regex else lowered in line.lower()
-            if not hit:
-                continue
-            window = lines[max(0, index - 2) : index + 3]
-            blocks.append("\n".join(window))
-        if not blocks:
-            return f"{await self._page_header()}\n\nNo matches."
-        joined = "\n\n----\n\n".join(blocks)
-        return f"{await self._page_header()}\n\nFound {len(blocks)} matches:\n\n{joined}"
-
-    async def snapshot(self, depth: int | None = None) -> str:
-        return await self._observation(depth)
-
-    async def click(self, target: str) -> str:
+    async def click(
+        self,
+        target: str,
+        depth: int | None = None,
+        find: str | None = None,
+    ) -> str:
         page = await self.page()
         await page.locator(f"aria-ref={_validate_ref(target)}").click()
-        return await self._observation()
+        return await self._observation(depth, find)
 
-    async def type(self, target: str, text: str, submit: bool = False) -> str:
+    async def type(
+        self,
+        target: str,
+        text: str,
+        submit: bool = False,
+        depth: int | None = None,
+        find: str | None = None,
+    ) -> str:
         page = await self.page()
         locator = page.locator(f"aria-ref={_validate_ref(target)}")
         await locator.fill(text)
         if submit:
             await locator.press("Enter")
-        return await self._observation()
+        return await self._observation(depth, find)
 
     async def wait_for(
         self,
         time_seconds: float | None = None,
         text: str | None = None,
         text_gone: str | None = None,
+        depth: int | None = None,
+        find: str | None = None,
     ) -> str:
         page = await self.page()
         provided = [value is not None for value in (time_seconds, text, text_gone)]
@@ -378,7 +474,7 @@ class BrowserSession:
             await page.get_by_text(text).first.wait_for(state="visible")
         else:
             await page.get_by_text(text_gone).first.wait_for(state="hidden")
-        return await self._observation()
+        return await self._observation(depth, find)
 
     async def take_screenshot(self, full_page: bool = False) -> str:
         """Write a screenshot to disk and return its path.
@@ -391,7 +487,13 @@ class BrowserSession:
         await page.screenshot(path=str(path), full_page=bool(full_page))
         return f"Screenshot saved to {path}"
 
-    async def tabs(self, action: str = "list", index: int | None = None) -> str:
+    async def tabs(
+        self,
+        action: str = "list",
+        index: int | None = None,
+        depth: int | None = None,
+        find: str | None = None,
+    ) -> str:
         await self.start()
         pages = self._context.pages
         if action == "list":
@@ -405,7 +507,7 @@ class BrowserSession:
         if action == "select":
             self._page = pages[index]
             await self._page.bring_to_front()
-            return await self._observation()
+            return await self._observation(depth, find)
         if action == "close":
             await pages[index].close()
             remaining = self._context.pages
@@ -455,8 +557,7 @@ async def call_tool(name: str, config: Mapping[str, Any], **arguments: Any) -> s
     ) as telemetry:
         method = {
             "navigate": session.navigate,
-            "find": session.find,
-            "snapshot": session.snapshot,
+            "look": session.look,
             "click": session.click,
             "type": session.type,
             "wait_for": session.wait_for,
