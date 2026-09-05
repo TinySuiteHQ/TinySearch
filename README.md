@@ -294,6 +294,8 @@ The optional FastAPI app mirrors these surfaces. `POST /search` accepts the
 same batch JSON contract.
 `POST /scrape` accepts one to five `{ "url", "query" }` items and always
 returns structured per-item outcomes.
+`POST /browser/navigate` and `POST /browser/act` mirror the two MCP browser
+tools and return their accessibility view as `{ "result": "..." }`.
 The app also exposes `/health`, `/current_datetime`, and read-only `/config`;
 configuration writes require explicit environment opt-in.
 
@@ -330,11 +332,11 @@ tools reuse the same driver and the same browser: no second runtime, no second
 browser, no child process.
 
 Two tools: `browser_navigate` and `browser_act`, the second folding `look`,
-`click`, `type`, `wait_for`, `take_screenshot`, `tabs`, and `close` behind one
+`click`, `type`, `wait_for`, `tabs`, and `close` behind one
 `action` parameter.
 
 That split is deliberate. MCP has no way to group or nest tools -- `tools/list`
-is flat and every schema is re-sent to the model on every request -- so eight
+is flat and every schema is re-sent to the model on every request -- so seven
 separate browser tools would dominate the server's schema. Publishing the entry
 point as its own tool and folding one page session's lifecycle behind a
 dispatcher keeps the whole server's schema small across five tools.
@@ -379,8 +381,6 @@ Three deliberate choices:
   clients do not conflict. That file is a server-side path, never exposed to a
   model or over HTTP.
 
-Screenshots are always written to disk and returned as a path, never inlined.
-
 To turn the tools off entirely, set `"browser_backend": "off"`; they are then
 removed from the tool list rather than merely refusing to run.
 
@@ -405,8 +405,8 @@ a host boundary, and do not expose port 9222 directly to the public internet.
 When TinySearch itself runs in Docker, `localhost` refers to the TinySearch
 container, so use an endpoint reachable from that container.
 
-`browser_backend`, `browser_cdp_url`, `browser_storage_state_path`, and
-`browser_output_dir` are operator-managed and cannot be changed through the
+`browser_backend`, `browser_cdp_url`, and `browser_storage_state_path` are
+operator-managed and cannot be changed through the
 HTTP `PUT /config` endpoint, even when configuration writes are enabled. Set
 them in the startup environment (`TINYSEARCH_BROWSER_BACKEND` and friends) or
 the file selected by `TINYSEARCH_CONFIG_PATH`, then restart TinySearch. HTTP

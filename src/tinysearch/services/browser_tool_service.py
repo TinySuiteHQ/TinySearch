@@ -52,7 +52,6 @@ TOOL_NAMES = (
     "click",
     "type",
     "wait_for",
-    "take_screenshot",
     "tabs",
     "close",
 )
@@ -65,17 +64,16 @@ TOOL_NAMES = (
 VIEW_ARGUMENTS = ("find", "depth")
 
 # MCP has no way to group or nest tools: `tools/list` is flat, and every
-# schema is re-sent to the model on every request. So the eight operations are
+# schema is re-sent to the model on every request. So the seven operations are
 # published as two tools. `navigate` stays first-class -- it is the entry
 # point, the only operation that does not need a page already open, and the
-# one a model reaches for first -- while the remaining seven are one page
+# one a model reaches for first -- while the remaining six are one page
 # session's lifecycle and fold behind `browser_act(action=...)`.
 ACT_ACTIONS = (
     "look",
     "click",
     "type",
     "wait_for",
-    "take_screenshot",
     "tabs",
     "close",
 )
@@ -89,7 +87,6 @@ _ACT_PARAMETERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "click": (("target", *VIEW_ARGUMENTS), ("target",)),
     "type": (("target", "text", "submit", *VIEW_ARGUMENTS), ("target", "text")),
     "wait_for": (("time_seconds", "text", "text_gone", *VIEW_ARGUMENTS), ()),
-    "take_screenshot": (("full_page",), ()),
     "tabs": (("action", "index", *VIEW_ARGUMENTS), ()),
     "close": ((), ()),
 }
@@ -289,12 +286,6 @@ class BrowserSession:
         raw = str(self._config.get("browser_storage_state_path") or "").strip()
         return Path(raw) if raw else None
 
-    def _output_dir(self) -> Path:
-        raw = str(self._config.get("browser_output_dir") or "").strip()
-        directory = Path(raw) if raw else Path.cwd() / ".tinysearch" / "browser"
-        directory.mkdir(parents=True, exist_ok=True)
-        return directory
-
     async def start(self) -> None:
         self._cancel_idle_shutdown()
         async with self._lock:
@@ -436,7 +427,7 @@ class BrowserSession:
             return f"{header}\n\n{matches}"
         return f"{header}\n\n### Snapshot\n{snapshot}"
 
-    # --- the eight operations ---------------------------------------------
+    # --- the seven operations ---------------------------------------------
 
     async def navigate(
         self,
@@ -505,17 +496,6 @@ class BrowserSession:
         else:
             await page.get_by_text(text_gone).first.wait_for(state="hidden")
         return await self._observation(depth, find)
-
-    async def take_screenshot(self, full_page: bool = False) -> str:
-        """Write a screenshot to disk and return its path.
-
-        The image is never inlined: a screenshot costs far more than the
-        snapshot text that should be driving decisions anyway.
-        """
-        page = await self.page()
-        path = self._output_dir() / f"screenshot-{int(time.time() * 1000)}.png"
-        await page.screenshot(path=str(path), full_page=bool(full_page))
-        return f"Screenshot saved to {path}"
 
     async def tabs(
         self,
@@ -591,7 +571,6 @@ async def call_tool(name: str, config: Mapping[str, Any], **arguments: Any) -> s
             "click": session.click,
             "type": session.type,
             "wait_for": session.wait_for,
-            "take_screenshot": session.take_screenshot,
             "tabs": session.tabs,
             "close": session.close_browser,
         }[name]

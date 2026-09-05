@@ -193,8 +193,8 @@ load, a cookie interstitial, a "load more" control, or a client-side search
 UI. They are an observe-then-act loop over one live page, not a batch call.
 
 browser_navigate(url) opens the page. browser_act(action, ...) then performs
-one operation on that same page: look, click, type, wait_for,
-take_screenshot, tabs, or close. Address elements only by a ref such as
+one operation on that same page: look, click, type, wait_for, tabs, or close.
+Address elements only by a ref such as
 [ref=e42] that you actually saw in a returned view -- never invent a ref or
 a CSS selector.
 
@@ -431,10 +431,9 @@ async def browser_navigate_tool(
         "look() reads it without touching it. "
         "click(target) / type(target, text, submit) act on a ref you saw in a "
         "returned view; never invent a ref or selector, never type credentials. "
-        "wait_for(time | text | text_gone). take_screenshot(full_page) saves a "
-        "file and returns its path; do not use it to pick a target. "
+        "wait_for(time | text | text_gone). "
         "tabs(tab_action, index). close() when done. "
-        "All but take_screenshot and close return a page view, so "
+        "All but close return a page view, so "
         + _FIND_HELP
         + " Read-only steps revealing already-public content (pagination, "
         "expanding a section, a cookie banner) need no confirmation; real-world "
@@ -444,7 +443,7 @@ async def browser_navigate_tool(
 async def browser_act_tool(
     action: Annotated[
         str,
-        Field(description="look|click|type|wait_for|take_screenshot|tabs|close"),
+        Field(description="look|click|type|wait_for|tabs|close"),
     ],
     target: Annotated[str, Field(description="click, type: element ref, e.g. 'e42'.")] = "",
     text: Annotated[str, Field(description="type: text to enter. wait_for: text to await.")] = "",
@@ -453,7 +452,6 @@ async def browser_act_tool(
     depth: Annotated[int, _DEPTH_FIELD] = 0,
     time: Annotated[float, Field(description="wait_for: seconds.")] = 0.0,
     text_gone: Annotated[str, Field(description="wait_for: text to await disappearing.")] = "",
-    full_page: Annotated[bool, Field(description="take_screenshot: full scrollable page.")] = False,
     tab_action: Annotated[str, Field(description="tabs: list|new|select|close.")] = "list",
     index: Annotated[int | None, Field(description="tabs: index for select/close.")] = None,
 ) -> str:
@@ -473,7 +471,6 @@ async def browser_act_tool(
         "depth": depth,
         "time_seconds": time,
         "text_gone": text_gone,
-        "full_page": full_page,
         "action": tab_action,
         "index": index,
     }

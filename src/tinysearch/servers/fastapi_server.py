@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 from tinysearch import core
+from tinysearch.services import browser_tool_service
 from tinysearch.services.tinysearch_config_service import (
     load_tinysearch_config,
     save_tinysearch_config,
@@ -18,14 +19,13 @@ from tinysearch.telemetry import configure_from_environment, shutdown as shutdow
 
 
 # Settings that let a caller reach outside the HTTP surface: an external
-# browser endpoint, a cookie/storage file, a directory TinySearch writes
-# into, and the switch that spawns the Playwright child process. All are
-# operator decisions made at startup, never over the API.
+# browser endpoint, a cookie/storage file, and the switch that launches or
+# attaches to Playwright. All are operator decisions made at startup, never
+# over the API.
 _OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({
     "browser_cdp_url",
     "browser_backend",
     "browser_storage_state_path",
-    "browser_output_dir",
 })
 
 
@@ -56,7 +56,8 @@ app = FastAPI(
     description=(
         "HTTP API mirroring the TinySearch MCP tools. POST /search provides "
         "fast backend-ordered discovery; /scrape provides deep grounded "
-        "retrieval for known URLs."
+        "retrieval for known URLs; /browser/* provides the same narrow "
+        "browser interaction surface."
     ),
     version=_tinysearch_version(),
     lifespan=_lifespan,
@@ -101,6 +102,53 @@ class SearchRequest(BaseModel):
 
     def normalized_items(self) -> list[dict[str, Any]]:
         return [item.model_dump() for item in self.items or []]
+
+
+class BrowserNavigateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: HttpUrl
+    find: str = ""
+    depth: int = Field(0, ge=0)
+
+    def arguments(self) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"url": str(self.url)}
+        if self.find:
+            arguments["find"] = self.find
+        if self.depth:
+            arguments["depth"] = self.depth
+        return arguments
+
+
+class BrowserActRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(..., min_length=1)
+    target: str = ""
+    text: str = ""
+    submit: bool = False
+    find: str = ""
+    depth: int = Field(0, ge=0)
+    time: float = Field(0.0, ge=0)
+    text_gone: str = ""
+    tab_action: str = "list"
+    index: int | None = None
+
+    def arguments(self) -> dict[str, Any]:
+        return browser_tool_service.resolve_act_arguments(
+            self.action,
+            {
+                "target": self.target,
+                "text": self.text,
+                "submit": self.submit,
+                "find": self.find,
+                "depth": self.depth,
+                "time_seconds": self.time,
+                "text_gone": self.text_gone,
+                "action": self.tab_action,
+                "index": self.index,
+            },
+        )
 
 
 @app.get("/health")
@@ -190,6 +238,45 @@ async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
     )
 
 
+async def _browser_endpoint(name: str, arguments: dict[str, Any]) -> dict[str, str]:
+    try:
+        result = await browser_tool_service.call_tool(
+            name,
+            load_tinysearch_config(),
+            **arguments,
+        )
+    except browser_tool_service.BrowserDisabledError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "browser_disabled", "message": str(exc)},
+        ) from exc
+    except browser_tool_service.BrowserToolError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "browser_error", "message": str(exc)},
+        ) from exc
+    return {"result": result}
+
+
+@app.post("/browser/navigate")
+async def browser_navigate_endpoint(
+    request: BrowserNavigateRequest,
+) -> dict[str, str]:
+    """Open an exact URL and return the same accessibility view as MCP."""
+    return await _browser_endpoint("navigate", request.arguments())
+
+
+@app.post("/browser/act")
+async def browser_act_endpoint(request: BrowserActRequest) -> dict[str, str]:
+    """Perform one folded browser action against the current page."""
+    try:
+        arguments = request.arguments()
+    except browser_tool_service.BrowserToolError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "browser_error", "message": str(exc)},
+        ) from exc
+    return await _browser_endpoint(request.action, arguments)
 
 
 @app.post("/search")

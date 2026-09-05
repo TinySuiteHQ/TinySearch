@@ -56,7 +56,6 @@ def load_tinysearch_config(path: str | Path | None = None) -> dict[str, Any]:
         ("TINYSEARCH_BROWSER_CDP_URL", "browser_cdp_url"),
         ("TINYSEARCH_BROWSER_BACKEND", "browser_backend"),
         ("TINYSEARCH_BROWSER_STORAGE_STATE_PATH", "browser_storage_state_path"),
-        ("TINYSEARCH_BROWSER_OUTPUT_DIR", "browser_output_dir"),
     ):
         value = os.environ.get(env_name, "").strip()
         if value:

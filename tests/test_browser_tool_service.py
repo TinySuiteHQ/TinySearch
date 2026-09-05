@@ -9,11 +9,19 @@ from tinysearch.services import browser_tool_service as bt
 
 
 class ToolSurfaceTests(unittest.TestCase):
-    def test_exposes_exactly_eight_operations(self) -> None:
-        self.assertEqual(len(bt.TOOL_NAMES), 8)
+    def test_exposes_exactly_seven_operations(self) -> None:
+        self.assertEqual(len(bt.TOOL_NAMES), 7)
 
     def test_no_code_execution_or_side_effecting_tools(self) -> None:
-        for banned in ("evaluate", "run_code", "fill_form", "file_upload", "drag", "drop"):
+        for banned in (
+            "evaluate",
+            "run_code",
+            "fill_form",
+            "file_upload",
+            "drag",
+            "drop",
+            "take_screenshot",
+        ):
             self.assertNotIn(banned, bt.TOOL_NAMES)
 
     def test_playwright_floor_is_checked_at_runtime(self) -> None:
@@ -275,7 +283,7 @@ class ResolveActArgumentsTests(unittest.TestCase):
 
     def test_arguments_for_other_actions_are_dropped(self) -> None:
         """A stray argument should not fail a call it does not apply to."""
-        resolved = bt.resolve_act_arguments("click", {"target": "e1", "full_page": True})
+        resolved = bt.resolve_act_arguments("click", {"target": "e1", "time_seconds": 2})
         self.assertEqual(resolved, {"target": "e1"})
 
     def test_missing_required_argument_names_itself(self) -> None:
@@ -331,8 +339,8 @@ class ToolRegistrationTests(unittest.TestCase):
     def _names(self) -> set[str]:
         return set(self.mcp_server.mcp._tool_manager._tools)
 
-    def test_browser_ships_as_two_tools_not_eight(self) -> None:
-        """MCP cannot group tools, so seven lifecycle actions fold into browser_act."""
+    def test_browser_ships_as_two_tools_not_seven(self) -> None:
+        """MCP cannot group tools, so six lifecycle actions fold into browser_act."""
         self.assertEqual(
             {n for n in self._names() if n.startswith("browser_")},
             {"browser_navigate", "browser_act"},

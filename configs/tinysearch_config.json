@@ -58,8 +58,6 @@
   "browser_cdp_url": "",
   "_comment_browser_storage_state_path": "Optional Playwright storage-state JSON file holding cookies and local storage. Sessions are isolated and seed from this file, so a cookie or consent banner is accepted once rather than on every navigation. Server-side only: never exposed to a model or over HTTP.",
   "browser_storage_state_path": "",
-  "_comment_browser_output_dir": "Directory for screenshots. Defaults to ./.tinysearch/browser when empty.",
-  "browser_output_dir": "",
   "_comment_browser_snapshot_depth": "Default maximum accessibility-tree depth per snapshot. A smaller depth returns a shallower but still valid tree and costs far fewer tokens. Zero means unlimited.",
   "browser_snapshot_depth": 0,
   "_comment_browser_response_char_budget": "Maximum characters returned from one browser tool call before truncation. Zero disables capping.",

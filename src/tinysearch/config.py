@@ -66,7 +66,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "browser_backend": "playwright",
     "browser_cdp_url": "",
     "browser_storage_state_path": "",
-    "browser_output_dir": "",
     "browser_snapshot_depth": 0,
     "browser_response_char_budget": 20000,
     "browser_idle_shutdown_seconds": 300.0,
@@ -115,7 +114,7 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
             if not str(key).startswith("_comment")
         }
     )
-    for legacy in ("embedding_gguf_file", "mcp_transport"):
+    for legacy in ("embedding_gguf_file", "mcp_transport", "browser_output_dir"):
         config.pop(legacy, None)
     for key in _INT_FIELDS:
         config[key] = int(config[key])
@@ -155,7 +154,6 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "browser_backend",
         "browser_cdp_url",
         "browser_storage_state_path",
-        "browser_output_dir",
     ):
         if config.get(key) is not None:
             config[key] = str(config[key])
