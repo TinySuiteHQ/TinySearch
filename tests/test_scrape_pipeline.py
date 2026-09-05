@@ -5,6 +5,7 @@ from datetime import datetime
 from unittest.mock import patch
 
 from tinysearch import to_prompt
+from tinysearch.config import normalize_config
 from tinysearch.pipelines.scrape import _links_under_budget, run_scrape_pipeline
 from tinysearch.results import public_chunk, result_envelope
 from tinysearch.services.scrape_service import (
@@ -264,6 +265,77 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bm25_score", result.chunks[0])
         self.assertIn("rrf_score", result.chunks[0])
 
+    async def test_focused_scrape_embeds_query_once_for_links_and_content(self) -> None:
+        embedded_inputs: list[str] = []
+
+        async def recording_embedder(inputs: list[str]) -> list[list[float]]:
+            embedded_inputs.extend(inputs)
+            return await _fake_embedder(inputs)
+
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(scrape_max_links=2),
+                embedder=recording_embedder,
+                crawl_fn=_fake_html_page_with_links,
+            )
+
+        prefix = normalize_config(_config())["dense_query_prefix"]
+        self.assertEqual(embedded_inputs.count(f"{prefix}async"), 1)
+
+    async def test_focused_scrape_uses_raw_markdown_when_fit_is_too_short(self) -> None:
+        async def short_fit(*, url, user_query, bm25_threshold, bm25_language):
+            page = await _fake_html_page(
+                url=url,
+                user_query=user_query,
+                bm25_threshold=bm25_threshold,
+                bm25_language=bm25_language,
+            )
+            page["markdown_raw"] = "RAW FALLBACK evidence about async."
+            page["markdown_fit"] = "async"
+            return page
+
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await scrape_url(
+                "https://example.com/article",
+                "async",
+                config=_config(crawl_fit_min_chars=20),
+                crawl_fn=short_fit,
+            )
+
+        self.assertIn("RAW FALLBACK", result.chunks[0]["text"])
+
+    async def test_focused_scrape_caps_page_before_chunk_embedding(self) -> None:
+        async def long_page(*, url, user_query, bm25_threshold, bm25_language):
+            page = await _fake_html_page(
+                url=url,
+                user_query=user_query,
+                bm25_threshold=bm25_threshold,
+                bm25_language=bm25_language,
+            )
+            page["markdown_fit"] = "async evidence " * 100 + "TAIL_SENTINEL"
+            return page
+
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ):
+            result = await scrape_url(
+                "https://example.com/article",
+                "async",
+                config=_config(crawl_max_page_tokens=20, crawl_fit_min_chars=0),
+                crawl_fn=long_page,
+            )
+
+        self.assertNotIn("TAIL_SENTINEL", "".join(c["text"] for c in result.chunks))
+
     async def test_returns_grounded_prompt_and_token_counts(self) -> None:
         with patch(
             "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
@@ -378,6 +450,22 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ScrapeUrlLinksTests(unittest.IsolatedAsyncioTestCase):
+    async def test_zero_link_limit_skips_link_parsing(self) -> None:
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
+            side_effect=_fake_safe_url,
+        ), patch("tinysearch.pipelines.scrape.extract_links_from_html") as extract:
+            result = await run_scrape_pipeline(
+                "https://example.com/article",
+                "async",
+                config=_config(scrape_max_links=0),
+                embedder=_fake_embedder,
+                crawl_fn=_fake_html_page_with_links,
+            )
+
+        extract.assert_not_called()
+        self.assertEqual(result.links, [])
+
     async def test_ranked_query_returns_bounded_safe_links(self) -> None:
         with patch(
             "tinysearch.pipelines.scrape.assert_url_is_fetchable",

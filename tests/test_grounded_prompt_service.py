@@ -8,6 +8,7 @@ from tinysearch.services.grounded_prompt_service import (
     format_relevant_text,
     format_url_grounded_prompt,
 )
+from tinysearch.results import result_envelope
 
 
 class FormatRelevantTextTests(unittest.TestCase):

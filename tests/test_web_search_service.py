@@ -667,6 +667,20 @@ class DispatcherTests(unittest.TestCase):
         self.assertEqual(len(searxng_calls), 1)
         self.assertEqual(ddgs_calls, [])
 
+    def test_configured_searxng_timeout_reaches_backend(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_searxng(query: str, limit: int, **kwargs: Any) -> list[SearchResult]:
+            captured.update(kwargs)
+            return []
+
+        with patch.object(web_search_service, "_searxng_search", new=fake_searxng):
+            _dispatch_search(
+                "q", 5, config=self._config(searxng_timeout_seconds=2.5)
+            )
+
+        self.assertEqual(captured["timeout"], 2.5)
+
     def test_searxng_failure_falls_back_to_ddgs_duckduckgo_when_enabled(self) -> None:
         def failing_searxng(*args: Any, **kwargs: Any) -> list[SearchResult]:
             raise SearchBackendUnavailable("searxng down")
@@ -862,6 +876,7 @@ class ConfigCoercionTests(unittest.TestCase):
             "http://searxng:8080/search",
         )
         self.assertTrue(DEFAULT_CONFIG["search_backend_fallback"])
+        self.assertEqual(DEFAULT_CONFIG["searxng_timeout_seconds"], 8.0)
         self.assertEqual(DEFAULT_CONFIG["ddgs_timeout_seconds"], 20.0)
         self.assertEqual(DEFAULT_CONFIG["ddgs_backend"], "auto")
 
@@ -875,6 +890,19 @@ class ConfigCoercionTests(unittest.TestCase):
         config = normalize_config({"ddgs_timeout_seconds": "5", "ddgs_backend": "brave"})
         self.assertEqual(config["ddgs_timeout_seconds"], 5.0)
         self.assertEqual(config["ddgs_backend"], "brave")
+
+    def test_normalize_config_accepts_searxng_timeout_override(self) -> None:
+        config = normalize_config({"searxng_timeout_seconds": "2.5"})
+        self.assertEqual(config["searxng_timeout_seconds"], 2.5)
+
+    def test_normalize_config_rejects_nonpositive_timeouts(self) -> None:
+        for key in (
+            "searxng_timeout_seconds",
+            "browser_idle_shutdown_seconds",
+            "browser_action_timeout_seconds",
+        ):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                normalize_config({key: 0})
 
     def test_ddgs_backend_is_allowed(self) -> None:
         config = normalize_config({"search_backend": "ddgs"})

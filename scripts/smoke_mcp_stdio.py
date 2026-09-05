@@ -13,6 +13,8 @@ from mcp.client.session import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 
+# Browser tools ship enabled by default; the smoke test asserts the core
+# research tools are present and that no unexpected tool leaks in.
 EXPECTED_TOOLS = {"get_current_datetime", "scrape_urls", "search"}
 
 
@@ -43,10 +45,16 @@ async def smoke() -> None:
                     await session.initialize()
                     response = await session.list_tools()
                     names = {tool.name for tool in response.tools}
-                    if names != EXPECTED_TOOLS:
+                    unexpected = {
+                        name
+                        for name in names - EXPECTED_TOOLS
+                        if not name.startswith("browser_")
+                    }
+                    if not EXPECTED_TOOLS <= names or unexpected:
                         raise RuntimeError(
                             f"unexpected MCP tools: {sorted(names)}; "
-                            f"expected {sorted(EXPECTED_TOOLS)}"
+                            f"expected {sorted(EXPECTED_TOOLS)} plus optional "
+                            "browser_* tools"
                         )
 
 

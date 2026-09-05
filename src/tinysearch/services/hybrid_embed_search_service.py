@@ -6,10 +6,28 @@ import math
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
+from weakref import WeakKeyDictionary, WeakValueDictionary
 
 from rank_bm25 import BM25Okapi
 
 from tinysearch.telemetry import span_scope
+
+
+_SHARED_EMBEDDING_SEMAPHORES: WeakKeyDictionary[
+    Any, WeakValueDictionary[int, asyncio.Semaphore]
+] = WeakKeyDictionary()
+
+
+def shared_embedding_semaphore(max_concurrent_calls: int) -> asyncio.Semaphore:
+    """Return one embedding limiter per event loop and configured limit."""
+    loop = asyncio.get_running_loop()
+    limit = max(1, int(max_concurrent_calls))
+    by_limit = _SHARED_EMBEDDING_SEMAPHORES.setdefault(loop, WeakValueDictionary())
+    semaphore = by_limit.get(limit)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(limit)
+        by_limit[limit] = semaphore
+    return semaphore
 
 EmbeddingVector = Sequence[float]
 EmbeddingFn = Callable[

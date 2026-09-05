@@ -3,6 +3,7 @@ import re
 import sys
 import tempfile
 from collections.abc import Mapping
+from contextlib import asynccontextmanager, suppress
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
@@ -20,7 +21,7 @@ from tinysearch.services.token_counter_service import (
 )
 from tinysearch.telemetry import span_scope
 
-_DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
+DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
     "ignore_links": True,
     "ignore_images": True,
     "skip_internal_links": True,
@@ -39,7 +40,7 @@ _DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
 # truncating real article content. Does not catch every kind of boilerplate
 # (e.g. an inline login-CTA banner not wrapped in one of these tags), just
 # the common semantically-tagged chrome.
-_BOILERPLATE_EXCLUDED_TAGS: list[str] = ["nav", "header", "footer", "aside"]
+BOILERPLATE_EXCLUDED_TAGS: list[str] = ["nav", "header", "footer", "aside"]
 
 
 @lru_cache(maxsize=1)
@@ -59,7 +60,7 @@ def _crawl4ai_stack() -> tuple[Any, Any, Any, Any, Any, Any]:
     )
 
 
-def _ensure_utf8_stdio() -> None:
+def ensure_utf8_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8")
@@ -67,7 +68,7 @@ def _ensure_utf8_stdio() -> None:
             pass
 
 
-def _get_markdown_raw(result: Any) -> str:
+def get_markdown_raw(result: Any) -> str:
     md_obj = getattr(result, "markdown", None)
 
     if md_obj is None:
@@ -79,7 +80,7 @@ def _get_markdown_raw(result: Any) -> str:
     return getattr(md_obj, "raw_markdown", "") or ""
 
 
-def _get_markdown_fit(result: Any) -> str:
+def get_markdown_fit(result: Any) -> str:
     md_obj = getattr(result, "markdown", None)
 
     if md_obj is None:
@@ -91,7 +92,7 @@ def _get_markdown_fit(result: Any) -> str:
     return getattr(md_obj, "fit_markdown", "") or ""
 
 
-def _get_html(result: Any) -> str:
+def get_html(result: Any) -> str:
     return getattr(result, "html", "") or ""
 
 
@@ -132,11 +133,11 @@ def _crawler_config_for_fit_markdown(
     )
     mode = fit_markdown_mode.strip().lower()
     if mode in ("", "off", "none", "raw"):
-        return CrawlerRunConfig(verbose=False, excluded_tags=_BOILERPLATE_EXCLUDED_TAGS)
+        return CrawlerRunConfig(verbose=False, excluded_tags=BOILERPLATE_EXCLUDED_TAGS)
     if mode == "bm25":
         q = (user_query or "").strip()
         if not q:
-            return CrawlerRunConfig(verbose=False, excluded_tags=_BOILERPLATE_EXCLUDED_TAGS)
+            return CrawlerRunConfig(verbose=False, excluded_tags=BOILERPLATE_EXCLUDED_TAGS)
         content_filter = BM25ContentFilter(
             user_query=q,
             bm25_threshold=bm25_threshold,
@@ -151,10 +152,10 @@ def _crawler_config_for_fit_markdown(
         )
     return CrawlerRunConfig(
         verbose=False,
-        excluded_tags=_BOILERPLATE_EXCLUDED_TAGS,
+        excluded_tags=BOILERPLATE_EXCLUDED_TAGS,
         markdown_generator=DefaultMarkdownGenerator(
             content_filter=content_filter,
-            options=dict(_DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
+            options=dict(DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
         )
     )
 
@@ -209,6 +210,87 @@ def create_browser_crawler(config: Mapping[str, Any] | None = None) -> Any:
     """
     AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
     return AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig, config))
+
+
+class BrowserCrawlerSession:
+    """Lazily reuse one Crawl4AI browser across server requests.
+
+    Direct Python calls still own a short-lived crawler. MCP and FastAPI create
+    one of these inside their lifespan, so Chromium stays warm between nearby
+    requests and is closed after the configured idle period or server shutdown.
+    """
+
+    def __init__(self) -> None:
+        self._lock = asyncio.Lock()
+        self._crawler: Any | None = None
+        self._active_leases = 0
+        self._idle_task: asyncio.Task[None] | None = None
+        self._idle_seconds = 300.0
+
+    @property
+    def started(self) -> bool:
+        return self._crawler is not None
+
+    def _cancel_idle_task(self) -> None:
+        task, self._idle_task = self._idle_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _close_crawler(self, crawler: Any | None) -> None:
+        if crawler is None:
+            return
+        with suppress(Exception):
+            await crawler.close()
+
+    async def _close_after_idle(self) -> None:
+        try:
+            await asyncio.sleep(self._idle_seconds)
+            async with self._lock:
+                if self._active_leases:
+                    return
+                crawler, self._crawler = self._crawler, None
+                self._idle_task = None
+            await self._close_crawler(crawler)
+        except asyncio.CancelledError:
+            return
+
+    @asynccontextmanager
+    async def lease(self, config: Mapping[str, Any]):
+        """Yield the shared started crawler and defer idle shutdown while in use."""
+        async with self._lock:
+            self._cancel_idle_task()
+            self._idle_seconds = float(
+                config.get("browser_idle_shutdown_seconds") or 300.0
+            )
+            if self._crawler is None:
+                crawler = create_browser_crawler(config)
+                try:
+                    await crawler.start()
+                except Exception:
+                    await self._close_crawler(crawler)
+                    raise
+                self._crawler = crawler
+            self._active_leases += 1
+            crawler = self._crawler
+        try:
+            yield crawler
+        finally:
+            async with self._lock:
+                self._active_leases = max(0, self._active_leases - 1)
+                if self._active_leases == 0 and self._crawler is not None:
+                    self._idle_task = asyncio.create_task(self._close_after_idle())
+
+    async def close(self) -> None:
+        """Close the shared crawler immediately during graceful shutdown."""
+        task = self._idle_task
+        self._cancel_idle_task()
+        if task is not None and task is not asyncio.current_task():
+            with suppress(asyncio.CancelledError):
+                await task
+        async with self._lock:
+            crawler, self._crawler = self._crawler, None
+            self._active_leases = 0
+        await self._close_crawler(crawler)
 
 
 def url_path_suffix(url: str) -> str:
@@ -339,7 +421,7 @@ async def crawl(
     Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
     to reuse one browser across many calls instead of launching a fresh one here.
     """
-    _ensure_utf8_stdio()
+    ensure_utf8_stdio()
 
     AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
 
@@ -363,9 +445,9 @@ async def crawl(
                 result = await owned_crawler.arun(url=url, config=run_config)
         browser_telemetry.complete()
 
-    html = _get_html(result)
-    markdown_raw = _get_markdown_raw(result)
-    markdown_fit = (_get_markdown_fit(result) or "") if run_config is not None else ""
+    html = get_html(result)
+    markdown_raw = get_markdown_raw(result)
+    markdown_fit = (get_markdown_fit(result) or "") if run_config is not None else ""
 
     markdown_body, markdown_source = _pick_markdown_for_chunking(
         markdown_raw,
@@ -401,6 +483,8 @@ async def fetch_html_for_query(
     *,
     bm25_threshold: float = 1.5,
     bm25_language: str = "english",
+    fit_markdown_mode: str = "bm25",
+    pruning_threshold: float = 0.48,
     crawler: Any | None = None,
 ) -> dict[str, Any]:
     """Fetch a URL, applying a BM25 content filter only for a supplied query.
@@ -412,27 +496,17 @@ async def fetch_html_for_query(
     Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
     to reuse one browser across many calls instead of launching a fresh one here.
     """
-    _ensure_utf8_stdio()
+    ensure_utf8_stdio()
 
-    AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, BM25ContentFilter, _, DefaultMarkdownGenerator = (
-        _crawl4ai_stack()
+    AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
+
+    config = _crawler_config_for_fit_markdown(
+        fit_markdown_mode=fit_markdown_mode,
+        user_query=user_query,
+        bm25_threshold=bm25_threshold,
+        bm25_language=bm25_language,
+        pruning_threshold=pruning_threshold,
     )
-
-    config_kwargs: dict[str, Any] = {
-        "verbose": False,
-        "excluded_tags": _BOILERPLATE_EXCLUDED_TAGS,
-    }
-    if user_query:
-        bm25_filter = BM25ContentFilter(
-            user_query=user_query,
-            bm25_threshold=bm25_threshold,
-            language=bm25_language,
-        )
-        config_kwargs["markdown_generator"] = DefaultMarkdownGenerator(
-            content_filter=bm25_filter,
-            options=dict(_DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
-        )
-    config = CrawlerRunConfig(**config_kwargs)
 
     with span_scope(
         "tinysearch.browser",
@@ -456,9 +530,13 @@ async def fetch_html_for_query(
 
     return {
         "final_url": str(final_url),
-        "html": _get_html(result),
-        "markdown_raw": _get_markdown_raw(result),
-        "markdown_fit": (_get_markdown_fit(result) or "") if user_query else "",
+        "html": get_html(result),
+        "markdown_raw": get_markdown_raw(result),
+        "markdown_fit": (
+            (get_markdown_fit(result) or "")
+            if fit_markdown_mode.strip().lower() not in ("", "off", "none", "raw")
+            else ""
+        ),
         "metadata": metadata,
     }
 
@@ -482,7 +560,7 @@ async def crawl_search(
 
     Returns: url, query, html, markdown_raw, markdown_fit, tokens_*, chunks, ranked_chunks
     """
-    _ensure_utf8_stdio()
+    ensure_utf8_stdio()
 
     if is_document_url(url):
         markdown_raw, document_type = await asyncio.to_thread(extract_document_text, url)
@@ -557,7 +635,7 @@ async def crawl_search(
 
 
 if __name__ == "__main__":
-    _ensure_utf8_stdio()
+    ensure_utf8_stdio()
 
     crawl_result = asyncio.run(
         crawl_search(

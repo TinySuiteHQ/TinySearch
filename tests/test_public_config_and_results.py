@@ -19,7 +19,12 @@ class PublicConfigTests(unittest.TestCase):
         self.assertEqual(config["search_backend"], "ddgs")
         self.assertEqual(config.search_backend, "ddgs")
         self.assertEqual(config.browser_cdp_url, "")
+        self.assertNotIn("browser_output_dir", config)
         json.dumps(config.to_dict())
+
+    def test_removed_screenshot_output_config_is_ignored(self) -> None:
+        config = TinySearchConfig(browser_output_dir="/tmp/screenshots")
+        self.assertNotIn("browser_output_dir", config)
 
     def test_explicit_file_then_call_overrides(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -49,9 +49,17 @@ def load_tinysearch_config(path: str | Path | None = None) -> dict[str, Any]:
     embedding_model = os.environ.get("TINYSEARCH_EMBEDDING_MODEL", "").strip()
     if embedding_model:
         overrides["embedding_model"] = embedding_model
-    browser_cdp_url = os.environ.get("TINYSEARCH_BROWSER_CDP_URL", "").strip()
-    if browser_cdp_url:
-        overrides["browser_cdp_url"] = browser_cdp_url
+    # Operator-managed browser settings. These are startup decisions (they can
+    # spawn a process, reach an external browser, or point at a cookie file), so
+    # they are settable by environment or config file but never over HTTP.
+    for env_name, key in (
+        ("TINYSEARCH_BROWSER_CDP_URL", "browser_cdp_url"),
+        ("TINYSEARCH_BROWSER_BACKEND", "browser_backend"),
+        ("TINYSEARCH_BROWSER_STORAGE_STATE_PATH", "browser_storage_state_path"),
+    ):
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            overrides[key] = value
     return (
         config.with_overrides(overrides).to_dict()
         if overrides

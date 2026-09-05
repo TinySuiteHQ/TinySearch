@@ -21,11 +21,22 @@ from tinysearch.results import public_chunk, public_link, result_envelope
 from tinysearch.services.current_datetime_service import current_datetime_payload
 from tinysearch.services.embedding_service import normalize_embedding_backend
 from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
-from tinysearch.services.site_crawl_service import create_browser_crawler, is_document_url
+from tinysearch.services.site_crawl_service import (
+    BrowserCrawlerSession,
+    create_browser_crawler,
+    is_document_url,
+)
 from tinysearch.services.web_search_service import search_batch_with_metadata
 from tinysearch.telemetry import span_scope
 
 get_current_datetime = current_datetime_payload
+
+
+async def close_browser_sessions() -> None:
+    """Close the live browser during a server's graceful shutdown."""
+    from tinysearch.services.browser_tool_service import shutdown_session
+
+    await shutdown_session()
 
 
 def _resolve_config(config: ConfigInput | None) -> dict[str, Any]:
@@ -235,6 +246,7 @@ async def scrape_urls(
     *,
     max_tokens: int = DEFAULT_SCRAPE_MAX_TOKENS,
     config: ConfigInput | None = None,
+    crawler_session: BrowserCrawlerSession | None = None,
 ) -> dict[str, Any]:
     """Scrape up to five URL/query pairs concurrently.
 
@@ -268,13 +280,28 @@ async def scrape_urls(
         await _ensure_browser_bundle(resolved)
 
         needs_browser = any(not is_document_url(url) for url, _ in normalized)
-        crawler_ctx = (
-            create_browser_crawler(resolved)
-            if needs_browser
-            else contextlib.nullcontext(None)
-        )
+        if needs_browser and crawler_session is not None:
+            crawler_ctx = crawler_session.lease(resolved)
+        elif needs_browser:
+            crawler_ctx = create_browser_crawler(resolved)
+        else:
+            crawler_ctx = contextlib.nullcontext(None)
+        unique_items: list[tuple[str, str | None]] = []
+        unique_indexes: list[int] = []
+        seen: dict[tuple[str, str], int] = {}
+        for url, query in normalized:
+            cleaned_query = (query or "").strip()
+            canonical_query = "*" if cleaned_query in {"", "*"} else cleaned_query
+            key = (url, canonical_query)
+            index = seen.get(key)
+            if index is None:
+                index = len(unique_items)
+                seen[key] = index
+                unique_items.append((url, query))
+            unique_indexes.append(index)
+
         async with crawler_ctx as shared_crawler:
-            settled = await asyncio.gather(
+            unique_outcomes = await asyncio.gather(
                 *(
                     _scrape_url_with_config(
                         url,
@@ -283,10 +310,11 @@ async def scrape_urls(
                         config=resolved,
                         crawler=shared_crawler,
                     )
-                    for url, query in normalized
+                    for url, query in unique_items
                 ),
                 return_exceptions=True,
             )
+        settled = [unique_outcomes[index] for index in unique_indexes]
         results: list[dict[str, Any]] = []
         for (url, query), outcome in zip(normalized, settled, strict=True):
             if isinstance(outcome, Exception):

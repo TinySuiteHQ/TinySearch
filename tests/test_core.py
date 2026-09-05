@@ -84,6 +84,75 @@ class CorePublicApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["results"][1]["error"]["message"], "bad URL")
         embeddings.assert_not_awaited()
 
+    async def test_duplicate_scrape_items_share_one_pipeline_run(self) -> None:
+        successful = _result_payload("q")
+        scrape = AsyncMock(return_value=successful)
+        with patch("tinysearch.core._scrape_url_with_config", scrape), patch(
+            "tinysearch.core._ensure_browser_bundle", new=AsyncMock()
+        ), patch(
+            "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
+        ), patch(
+            "tinysearch.core.create_browser_crawler",
+            return_value=contextlib.nullcontext(None),
+        ):
+            result = await scrape_urls(
+                [
+                    {"url": "https://one.example", "query": "q"},
+                    {"url": "https://one.example", "query": "q"},
+                ]
+            )
+
+        scrape.assert_awaited_once()
+        self.assertEqual(len(result["results"]), 2)
+        self.assertEqual(result["results"][0], result["results"][1])
+
+    async def test_equivalent_raw_scrape_items_share_one_pipeline_run(self) -> None:
+        successful = _result_payload("*")
+        scrape = AsyncMock(return_value=successful)
+        with patch("tinysearch.core._scrape_url_with_config", scrape), patch(
+            "tinysearch.core._ensure_browser_bundle", new=AsyncMock()
+        ), patch(
+            "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
+        ), patch(
+            "tinysearch.core.create_browser_crawler",
+            return_value=contextlib.nullcontext(None),
+        ):
+            await scrape_urls(
+                [
+                    {"url": "https://one.example"},
+                    {"url": "https://one.example", "query": "*"},
+                ]
+            )
+
+        scrape.assert_awaited_once()
+
+    async def test_server_crawler_session_is_leased_instead_of_recreated(self) -> None:
+        successful = _result_payload("*")
+
+        class FakeSession:
+            def __init__(self) -> None:
+                self.leases = 0
+
+            @contextlib.asynccontextmanager
+            async def lease(self, config):
+                self.leases += 1
+                yield "shared-crawler"
+
+        session = FakeSession()
+        scrape = AsyncMock(return_value=successful)
+        with patch("tinysearch.core._scrape_url_with_config", scrape), patch(
+            "tinysearch.core._ensure_browser_bundle", new=AsyncMock()
+        ), patch(
+            "tinysearch.core._ensure_local_bundle_for_config", new=AsyncMock()
+        ), patch("tinysearch.core.create_browser_crawler") as create:
+            await scrape_urls(
+                [{"url": "https://one.example"}], crawler_session=session
+            )
+
+        create.assert_not_called()
+        self.assertEqual(session.leases, 1)
+        self.assertEqual(scrape.await_args.kwargs["crawler"], "shared-crawler")
+
     async def test_ensure_local_bundle_skips_non_onnx_backend(self) -> None:
         with patch(
             "tinysearch.services.onnx_bundle_service.ensure_onnx_bundle_sync"

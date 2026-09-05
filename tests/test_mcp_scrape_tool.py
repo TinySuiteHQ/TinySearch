@@ -36,16 +36,23 @@ def _fn(coro):
 class ScrapeUrlsToolTests(unittest.IsolatedAsyncioTestCase):
     def test_mcp_exposes_only_batch_scrape_tool(self) -> None:
         self.assertEqual(
-            set(mcp._tool_manager._tools),
+            {name for name in mcp._tool_manager._tools if not name.startswith("browser_")},
             {"get_current_datetime", "search", "scrape_urls"},
+        )
+        self.assertEqual(
+            {name for name in mcp._tool_manager._tools if name.startswith("browser_")},
+            {"browser_navigate", "browser_act"},
         )
         self.assertEqual(list(signature(_fn(scrape_urls_tool)).parameters), ["items"])
 
     async def test_batch_tool_preserves_omitted_and_focused_queries(self) -> None:
         batch_mock = AsyncMock(return_value={"operation": "scrape_batch", "results": []})
         config = {"scrape_max_tokens": 2000}
+        crawler_session = object()
         with patch("tinysearch.core.scrape_urls", batch_mock), patch(
             "tinysearch.servers.mcp_server.load_tinysearch_config", return_value=config
+        ), patch(
+            "tinysearch.servers.mcp_server._crawler_session", crawler_session
         ):
             result = await _fn(scrape_urls_tool)(
                 [{"url": "https://one.example"}, {"url": "https://two.example", "query": "pricing"}]
@@ -55,6 +62,9 @@ class ScrapeUrlsToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(batch_mock.await_args.args[0][0], {"url": "https://one.example"})
         self.assertEqual(batch_mock.await_args.kwargs["max_tokens"], 2000)
         self.assertIs(batch_mock.await_args.kwargs["config"], config)
+        self.assertIs(
+            batch_mock.await_args.kwargs["crawler_session"], crawler_session
+        )
 
     async def test_mcp_batch_wire_text_is_well_formed_xml(self) -> None:
         batch = {"operation": "scrape_batch", "results": [{"status": "ok", "result": _result()}]}

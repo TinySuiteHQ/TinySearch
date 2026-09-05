@@ -9,22 +9,41 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 from tinysearch import core
+from tinysearch.services import browser_tool_service
 from tinysearch.services.tinysearch_config_service import (
     load_tinysearch_config,
     save_tinysearch_config,
 )
+from tinysearch.services.site_crawl_service import BrowserCrawlerSession
 from tinysearch.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
 
-_OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({"browser_cdp_url"})
+# Settings that let a caller reach outside the HTTP surface: an external
+# browser endpoint, a cookie/storage file, and the switch that launches or
+# attaches to Playwright. All are operator decisions made at startup, never
+# over the API.
+_OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({
+    "browser_cdp_url",
+    "browser_backend",
+    "browser_storage_state_path",
+})
+
+
+_crawler_session: BrowserCrawlerSession | None = None
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    global _crawler_session
     configure_from_environment()
+    _crawler_session = BrowserCrawlerSession()
     try:
         yield
     finally:
+        crawler_session, _crawler_session = _crawler_session, None
+        if crawler_session is not None:
+            await crawler_session.close()
+        await core.close_browser_sessions()
         shutdown_telemetry()
 
 
@@ -37,7 +56,8 @@ app = FastAPI(
     description=(
         "HTTP API mirroring the TinySearch MCP tools. POST /search provides "
         "fast backend-ordered discovery; /scrape provides deep grounded "
-        "retrieval for known URLs."
+        "retrieval for known URLs; /browser/* provides the same narrow "
+        "browser interaction surface."
     ),
     version=_tinysearch_version(),
     lifespan=_lifespan,
@@ -84,6 +104,53 @@ class SearchRequest(BaseModel):
         return [item.model_dump() for item in self.items or []]
 
 
+class BrowserNavigateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: HttpUrl
+    find: str = ""
+    depth: int = Field(0, ge=0)
+
+    def arguments(self) -> dict[str, Any]:
+        arguments: dict[str, Any] = {"url": str(self.url)}
+        if self.find:
+            arguments["find"] = self.find
+        if self.depth:
+            arguments["depth"] = self.depth
+        return arguments
+
+
+class BrowserActRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: str = Field(..., min_length=1)
+    target: str = ""
+    text: str = ""
+    submit: bool = False
+    find: str = ""
+    depth: int = Field(0, ge=0)
+    time: float = Field(0.0, ge=0)
+    text_gone: str = ""
+    tab_action: str = "list"
+    index: int | None = None
+
+    def arguments(self) -> dict[str, Any]:
+        return browser_tool_service.resolve_act_arguments(
+            self.action,
+            {
+                "target": self.target,
+                "text": self.text,
+                "submit": self.submit,
+                "find": self.find,
+                "depth": self.depth,
+                "time_seconds": self.time,
+                "text_gone": self.text_gone,
+                "action": self.tab_action,
+                "index": self.index,
+            },
+        )
+
+
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -100,7 +167,7 @@ async def get_config_endpoint() -> dict[str, Any]:
     return {
         key: (
             "***"
-            if (key == "browser_cdp_url" and value)
+            if (key in ("browser_cdp_url", "browser_storage_state_path") and value)
             or any(marker in key.lower() for marker in ("secret", "token", "api_key"))
             else value
         )
@@ -142,10 +209,11 @@ async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
             detail={
                 "code": "operator_managed_config",
                 "message": (
-                    "browser_cdp_url cannot be changed over HTTP. Configure it "
-                    "at startup with TINYSEARCH_BROWSER_CDP_URL or in the file "
-                    "selected by TINYSEARCH_CONFIG_PATH, then restart TinySearch. "
-                    "Omit browser_cdp_url when updating other settings."
+                    f"{', '.join(operator_managed_fields)} cannot be changed over "
+                    "HTTP. Configure these at startup with "
+                    f"{', '.join('TINYSEARCH_' + f.upper() for f in operator_managed_fields)} "
+                    "or in the file selected by TINYSEARCH_CONFIG_PATH, then "
+                    "restart TinySearch. Omit them when updating other settings."
                 ),
                 "fields": operator_managed_fields,
             },
@@ -166,7 +234,49 @@ async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
         [item.model_dump(mode="json") for item in request.items],
         max_tokens=request.max_tokens,
         config=load_tinysearch_config(),
+        crawler_session=_crawler_session,
     )
+
+
+async def _browser_endpoint(name: str, arguments: dict[str, Any]) -> dict[str, str]:
+    try:
+        result = await browser_tool_service.call_tool(
+            name,
+            load_tinysearch_config(),
+            **arguments,
+        )
+    except browser_tool_service.BrowserDisabledError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "browser_disabled", "message": str(exc)},
+        ) from exc
+    except browser_tool_service.BrowserToolError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "browser_error", "message": str(exc)},
+        ) from exc
+    return {"result": result}
+
+
+@app.post("/browser/navigate")
+async def browser_navigate_endpoint(
+    request: BrowserNavigateRequest,
+) -> dict[str, str]:
+    """Open an exact URL and return the same accessibility view as MCP."""
+    return await _browser_endpoint("navigate", request.arguments())
+
+
+@app.post("/browser/act")
+async def browser_act_endpoint(request: BrowserActRequest) -> dict[str, str]:
+    """Perform one folded browser action against the current page."""
+    try:
+        arguments = request.arguments()
+    except browser_tool_service.BrowserToolError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "browser_error", "message": str(exc)},
+        ) from exc
+    return await _browser_endpoint(request.action, arguments)
 
 
 @app.post("/search")

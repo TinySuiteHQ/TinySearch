@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import inspect
 from collections.abc import Mapping
 from functools import partial
 from typing import Any
@@ -14,6 +14,7 @@ from rank_bm25 import BM25Okapi
 from tinysearch.services.hybrid_embed_search_service import (
     EmbeddingFn,
     rank_chunks_hybrid,
+    shared_embedding_semaphore,
     tokenize_for_retrieval,
 )
 from tinysearch.services.link_extraction_service import (
@@ -37,12 +38,16 @@ from tinysearch.services.scrape_service import (
 )
 from tinysearch.services.token_counter_service import decode_tokens, encode_tokens
 from tinysearch.services.site_crawl_service import (
+    _pick_markdown_for_chunking,
     extract_document_text,
     fetch_html_for_query,
     is_document_url,
     url_path_suffix,
 )
-from tinysearch.services.text_chunking_service import chunk_text
+from tinysearch.services.text_chunking_service import (
+    chunk_text,
+    truncate_text_to_max_tokens,
+)
 from tinysearch.services.url_safety_service import assert_url_is_fetchable
 from tinysearch.telemetry import span_scope
 
@@ -50,6 +55,24 @@ from tinysearch.telemetry import span_scope
 # Bounds embedding cost on link-heavy pages; ranking only ever returns
 # `max_links` of these, but every candidate in the pool gets embedded.
 _MAX_LINK_CANDIDATES = 100
+
+
+def _memoizing_embedder(embedder: EmbeddingFn) -> EmbeddingFn:
+    """Reuse identical embedding batches within one page ranking operation."""
+    cache: dict[tuple[str, ...], list[list[float]]] = {}
+
+    async def cached(inputs: list[str]) -> list[list[float]]:
+        key = tuple(inputs)
+        vectors = cache.get(key)
+        if vectors is None:
+            value = embedder(inputs)
+            if inspect.isawaitable(value):
+                value = await value
+            vectors = [list(vector) for vector in value]
+            cache[key] = vectors
+        return [list(vector) for vector in vectors]
+
+    return cached
 
 
 def _prefilter_links_by_bm25(
@@ -127,8 +150,8 @@ async def _select_top_links(
         dense_query_prefix=resolved["dense_query_prefix"],
         dense_document_prefix=resolved["dense_document_prefix"],
         dense_document_embed_batch_size=resolved["dense_document_embed_batch_size"],
-        semaphore=asyncio.Semaphore(
-            max(1, resolved["max_concurrent_embedding_calls"])
+        semaphore=shared_embedding_semaphore(
+            resolved["max_concurrent_embedding_calls"]
         ),
         timeout_seconds=resolved["embedding_timeout_seconds"],
         max_timeout_retries=resolved["embedding_timeout_retries"],
@@ -231,7 +254,14 @@ async def run_scrape_pipeline(
             )
             fetch_telemetry.complete()
     else:
-        crawl_fn = crawl_fn or fetch_html_for_query
+        if crawl_fn is None:
+            crawl_fn = partial(
+                fetch_html_for_query,
+                fit_markdown_mode=(
+                    "off" if raw_page_order else resolved["crawl_fit_markdown_mode"]
+                ),
+                pruning_threshold=resolved["crawl_pruning_threshold"],
+            )
         with span_scope(
             "tinysearch.fetch",
             attributes={"tinysearch.browser.used": True, "tinysearch.document.type": "html"},
@@ -253,18 +283,26 @@ async def run_scrape_pipeline(
         if final_url != safe_url:
             final_url = assert_url_is_fetchable(final_url, blocked_domains)
         with span_scope("tinysearch.extract", operation="extract") as extract_telemetry:
-            candidate_links = sanitize_and_dedupe_links(
-                extract_links_from_html(html, final_url),
-                base_url=final_url,
-                blocked_domains=blocked_domains,
-            )
+            if int(resolved["scrape_max_links"]) > 0:
+                candidate_links = sanitize_and_dedupe_links(
+                    extract_links_from_html(html, final_url),
+                    base_url=final_url,
+                    blocked_domains=blocked_domains,
+                )
             extract_telemetry.complete(
                 result_count=len(candidate_links),
                 attributes={"tinysearch.link.candidate.count": len(candidate_links)},
             )
         markdown_raw = str(page.get("markdown_raw") or "")
         markdown_fit = str(page.get("markdown_fit") or "")
-        markdown = markdown_raw if raw_page_order else markdown_fit or markdown_raw
+        if raw_page_order:
+            markdown = markdown_raw
+        else:
+            markdown, _markdown_source = _pick_markdown_for_chunking(
+                markdown_raw,
+                markdown_fit,
+                int(resolved["crawl_fit_min_chars"]),
+            )
 
     if not markdown or not markdown.strip():
         raise EmptyContentError(f"no readable content extracted from {final_url}")
@@ -308,6 +346,14 @@ async def run_scrape_pipeline(
             link_tokens=link_tokens,
         )
 
+    page_token_limit = int(resolved["crawl_max_page_tokens"])
+    if page_token_limit > 0:
+        markdown = truncate_text_to_max_tokens(
+            markdown,
+            page_token_limit,
+            tokenizer_name,
+        )
+
     with span_scope("tinysearch.extract", operation="extract") as extract_telemetry:
         chunks = chunk_text(
             text=markdown,
@@ -332,6 +378,7 @@ async def run_scrape_pipeline(
                 else None
             ),
         )
+    embedder = _memoizing_embedder(embedder)
     links = await _select_top_links(
         candidate_links,
         query=cleaned_query,
@@ -356,8 +403,8 @@ async def run_scrape_pipeline(
         dense_document_embed_batch_size=resolved[
             "dense_document_embed_batch_size"
         ],
-        semaphore=asyncio.Semaphore(
-            max(1, resolved["max_concurrent_embedding_calls"])
+        semaphore=shared_embedding_semaphore(
+            resolved["max_concurrent_embedding_calls"]
         ),
         timeout_seconds=resolved["embedding_timeout_seconds"],
         max_timeout_retries=resolved["embedding_timeout_retries"],
