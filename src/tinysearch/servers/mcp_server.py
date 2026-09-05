@@ -5,6 +5,7 @@ import faulthandler
 import os
 import sys
 import time
+from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
@@ -14,6 +15,7 @@ from starlette.datastructures import Headers
 from starlette.routing import BaseRoute, Mount, Route
 
 from tinysearch import core
+from tinysearch.services.site_crawl_service import BrowserCrawlerSession
 from tinysearch.services.tinysearch_config_service import load_tinysearch_config
 from tinysearch.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
@@ -239,6 +241,23 @@ def _enable_traceback_dump() -> None:
     faulthandler.dump_traceback_later(delay, repeat=True, file=sys.stderr)
 
 
+_crawler_session: BrowserCrawlerSession | None = None
+
+
+@asynccontextmanager
+async def _mcp_lifespan(_server: FastMCP):
+    """Keep Crawl4AI warm within the MCP event loop and close it cleanly."""
+    global _crawler_session
+    _crawler_session = BrowserCrawlerSession()
+    try:
+        yield {}
+    finally:
+        crawler_session, _crawler_session = _crawler_session, None
+        if crawler_session is not None:
+            await crawler_session.close()
+        await core.close_browser_sessions()
+
+
 mcp = FastMCP(
     "tinysearch",
     instructions=MCP_INSTRUCTIONS,
@@ -246,6 +265,7 @@ mcp = FastMCP(
     port=_mcp_port(),
     sse_path="/mcp/sse",
     message_path="/mcp/messages/",
+    lifespan=_mcp_lifespan,
 )
 
 
@@ -328,6 +348,7 @@ async def scrape_urls_tool(
         items,
         max_tokens=max_tokens,
         config=config,
+        crawler_session=_crawler_session,
     )
     from tinysearch.services.grounded_prompt_service import format_url_grounded_answers
 

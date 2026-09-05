@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -241,6 +242,22 @@ class SessionBehaviourTests(unittest.IsolatedAsyncioTestCase):
         for kwargs in ({}, {"time_seconds": 1, "text": "a"}):
             with self.assertRaises(bt.BrowserToolError):
                 await session.wait_for(**kwargs)
+
+    async def test_idle_timer_closes_a_warm_browser(self) -> None:
+        session = self._session(browser_idle_shutdown_seconds=0.01)
+        context = session._context
+        context.close = AsyncMock()
+        browser = MagicMock(close=AsyncMock())
+        playwright = MagicMock(stop=AsyncMock())
+        session._browser = browser
+        session._playwright = playwright
+
+        session.schedule_idle_shutdown()
+        await asyncio.sleep(0.03)
+
+        self.assertFalse(session.started)
+        context.close.assert_awaited_once()
+        browser.close.assert_awaited_once()
 
 
 class ResolveActArgumentsTests(unittest.TestCase):

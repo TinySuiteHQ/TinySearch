@@ -511,6 +511,9 @@ def _dispatch_search_with_metadata_uninstrumented(
         or ""
     )
     fallback_enabled = bool(config.get("search_backend_fallback", True))
+    searxng_timeout = float(
+        config.get("searxng_timeout_seconds") or _DEFAULT_SEARXNG_TIMEOUT
+    )
     ddgs_backend = str(config.get("ddgs_backend") or DEFAULT_DDGS_BACKEND)
     ddgs_timeout = float(config.get("ddgs_timeout_seconds") or _DEFAULT_DDGS_TIMEOUT)
 
@@ -541,7 +544,8 @@ def _dispatch_search_with_metadata_uninstrumented(
     if backend == "auto":
         try:
             return SearchResponse(_searxng_search(
-                query, limit, url=url, engines=engines, region=str(region) or None
+                query, limit, url=url, engines=engines, region=str(region) or None,
+                timeout=searxng_timeout,
             ), "searxng")
         except SearchBackendError:
             return SearchResponse(_ddgs_search(
@@ -551,7 +555,8 @@ def _dispatch_search_with_metadata_uninstrumented(
     # backend == "searxng"
     try:
         return SearchResponse(_searxng_search(
-            query, limit, url=url, engines=engines, region=str(region) or None
+            query, limit, url=url, engines=engines, region=str(region) or None,
+            timeout=searxng_timeout,
         ), "searxng")
     except SearchBackendError:
         if not fallback_enabled:
@@ -661,8 +666,18 @@ def _backend_attempt_plan(
     engines = config.get("search_engines")
     region = str(config.get("search_region") or config.get("search_country") or "") or None
     ddgs_backend = str(config.get("ddgs_backend") or DEFAULT_DDGS_BACKEND)
+    searxng_timeout = float(
+        config.get("searxng_timeout_seconds") or _DEFAULT_SEARXNG_TIMEOUT
+    )
     ddgs_timeout = float(config.get("ddgs_timeout_seconds") or _DEFAULT_DDGS_TIMEOUT)
-    searxng = lambda: _searxng_search(query, limit, url=url, engines=engines, region=region)
+    searxng = lambda: _searxng_search(
+        query,
+        limit,
+        url=url,
+        engines=engines,
+        region=region,
+        timeout=searxng_timeout,
+    )
     ddgs = lambda: _ddgs_search(query, limit, region=region, backend=ddgs_backend, timeout=ddgs_timeout)
     duckduckgo = lambda: _ddgs_search(query, limit, region=region, backend="duckduckgo", timeout=ddgs_timeout)
     brave_key = _read_brave_api_key()

@@ -279,6 +279,7 @@ class BrowserSession:
         self._owns_browser = True
         self._lock = asyncio.Lock()
         self._last_used = time.monotonic()
+        self._idle_task: asyncio.Task[None] | None = None
 
     @property
     def started(self) -> bool:
@@ -295,6 +296,7 @@ class BrowserSession:
         return directory
 
     async def start(self) -> None:
+        self._cancel_idle_shutdown()
         async with self._lock:
             if self.started:
                 return
@@ -335,6 +337,10 @@ class BrowserSession:
             pass
 
     async def close(self) -> None:
+        idle_task = self._idle_task
+        self._idle_task = None
+        if idle_task is not None and idle_task is not asyncio.current_task():
+            idle_task.cancel()
         async with self._lock:
             await self._save_storage_state()
             for closer in (self._context, self._browser if self._owns_browser else None):
@@ -350,7 +356,31 @@ class BrowserSession:
                     pass
             self._playwright = self._browser = self._context = self._page = None
 
+    def _cancel_idle_shutdown(self) -> None:
+        task, self._idle_task = self._idle_task, None
+        if task is not None and task is not asyncio.current_task():
+            task.cancel()
+
+    async def _shutdown_after_idle(self) -> None:
+        try:
+            idle_seconds = float(
+                self._config.get("browser_idle_shutdown_seconds") or 300.0
+            )
+            await asyncio.sleep(idle_seconds)
+            if self.started and self.idle_seconds() >= idle_seconds:
+                await self.close()
+        except asyncio.CancelledError:
+            return
+
+    def schedule_idle_shutdown(self) -> None:
+        """Restart the inactivity timer after a completed browser tool call."""
+        self._cancel_idle_shutdown()
+        if self.started:
+            self._last_used = time.monotonic()
+            self._idle_task = asyncio.create_task(self._shutdown_after_idle())
+
     async def page(self) -> Any:
+        self._cancel_idle_shutdown()
         await self.start()
         self._last_used = time.monotonic()
         if self._page is None or self._page.is_closed():
@@ -571,6 +601,8 @@ async def call_tool(name: str, config: Mapping[str, Any], **arguments: Any) -> s
             raise
         except Exception as exc:
             raise BrowserToolError(f"{name} failed: {exc}") from exc
+        finally:
+            session.schedule_idle_shutdown()
         telemetry.complete()
 
     return cap(result, int(config.get("browser_response_char_budget") or 0))

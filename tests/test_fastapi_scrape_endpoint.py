@@ -47,7 +47,10 @@ class ScrapeUrlsRequestValidationTests(unittest.TestCase):
 class ScrapeEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_batch_passes_independent_optional_queries_to_core(self) -> None:
         batch_mock = AsyncMock(return_value={"operation": "scrape_batch", "status": "ok", "results": []})
-        with patch("tinysearch.core.scrape_urls", batch_mock):
+        crawler_session = object()
+        with patch("tinysearch.core.scrape_urls", batch_mock), patch(
+            "tinysearch.servers.fastapi_server._crawler_session", crawler_session
+        ):
             payload = await scrape_endpoint(
                 ScrapeBatchRequest(
                     items=[
@@ -61,6 +64,9 @@ class ScrapeEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(batch_mock.await_args.args[0][0]["query"], None)
         self.assertEqual(batch_mock.await_args.args[0][1]["query"], "find pricing")
         self.assertEqual(batch_mock.await_args.kwargs["max_tokens"], 321)
+        self.assertIs(
+            batch_mock.await_args.kwargs["crawler_session"], crawler_session
+        )
 
 
 if __name__ == "__main__":

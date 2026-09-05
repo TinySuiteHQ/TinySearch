@@ -13,6 +13,7 @@ from tinysearch.services.tinysearch_config_service import (
     load_tinysearch_config,
     save_tinysearch_config,
 )
+from tinysearch.services.site_crawl_service import BrowserCrawlerSession
 from tinysearch.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
 
@@ -28,12 +29,20 @@ _OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({
 })
 
 
+_crawler_session: BrowserCrawlerSession | None = None
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    global _crawler_session
     configure_from_environment()
+    _crawler_session = BrowserCrawlerSession()
     try:
         yield
     finally:
+        crawler_session, _crawler_session = _crawler_session, None
+        if crawler_session is not None:
+            await crawler_session.close()
         await core.close_browser_sessions()
         shutdown_telemetry()
 
@@ -177,6 +186,7 @@ async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
         [item.model_dump(mode="json") for item in request.items],
         max_tokens=request.max_tokens,
         config=load_tinysearch_config(),
+        crawler_session=_crawler_session,
     )
 
 

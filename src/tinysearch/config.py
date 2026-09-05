@@ -60,6 +60,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "search_engines": [],
     "search_region": "",
     "search_backend_fallback": True,
+    "searxng_timeout_seconds": 8.0,
     "ddgs_timeout_seconds": 20.0,
     "ddgs_backend": "auto",
     "browser_backend": "playwright",
@@ -97,6 +98,7 @@ _FLOAT_FIELDS = {
     "crawl_bm25_threshold",
     "crawl_pruning_threshold",
     "embedding_timeout_seconds",
+    "searxng_timeout_seconds",
     "ddgs_timeout_seconds",
     "browser_idle_shutdown_seconds",
     "browser_action_timeout_seconds",
@@ -125,7 +127,11 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
             raise ValueError(f"tinysearch config {key} must be positive")
     for key in _FLOAT_FIELDS:
         config[key] = float(config[key])
-    for key in ("browser_idle_shutdown_seconds", "browser_action_timeout_seconds"):
+    for key in (
+        "searxng_timeout_seconds",
+        "browser_idle_shutdown_seconds",
+        "browser_action_timeout_seconds",
+    ):
         if config[key] <= 0:
             raise ValueError(f"tinysearch config {key} must be positive")
     for key in ("browser_response_char_budget", "browser_snapshot_depth"):

@@ -7,6 +7,12 @@ from tinysearch.services import browser_bundle_service
 
 
 class ChromiumReadyTests(unittest.TestCase):
+    def setUp(self) -> None:
+        browser_bundle_service.chromium_ready.cache_clear()
+
+    def tearDown(self) -> None:
+        browser_bundle_service.chromium_ready.cache_clear()
+
     def test_ready_when_executable_exists(self) -> None:
         with patch.object(
             browser_bundle_service, "_chromium_executable"
@@ -26,6 +32,16 @@ class ChromiumReadyTests(unittest.TestCase):
             browser_bundle_service, "_chromium_executable", return_value=None
         ):
             self.assertFalse(browser_bundle_service.chromium_ready())
+
+    def test_result_is_cached_within_the_process(self) -> None:
+        with patch.object(
+            browser_bundle_service, "_chromium_executable"
+        ) as executable:
+            executable.return_value.exists.return_value = True
+            self.assertTrue(browser_bundle_service.chromium_ready())
+            self.assertTrue(browser_bundle_service.chromium_ready())
+
+        executable.assert_called_once_with()
 
 
 class EnsureChromiumSyncTests(unittest.TestCase):

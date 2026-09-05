@@ -157,6 +157,10 @@ embedding model. Pre-warm both ahead of time if you will use those workflows:
 uvx --from "tinysuite-search[server]" tinysearch setup
 ```
 
+The MCP and FastAPI servers keep the scraper browser warm between nearby
+requests, then close it after `browser_idle_shutdown_seconds`. Direct Python
+calls retain their short-lived, caller-owned lifecycle.
+
 <p align="center">
   <img src="assets/demo_terminal_prompt.gif" alt="TinySearch CLI setup and first run in a terminal" width="780" />
 </p>

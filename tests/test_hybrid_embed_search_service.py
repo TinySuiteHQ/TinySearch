@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import unittest
 
-from tinysearch.services.hybrid_embed_search_service import rank_chunks_hybrid
+from tinysearch.services.hybrid_embed_search_service import (
+    rank_chunks_hybrid,
+    shared_embedding_semaphore,
+)
 
 
 async def _fake_embedder(inputs: list[str]) -> list[list[float]]:
@@ -22,6 +25,13 @@ async def _fake_embedder(inputs: list[str]) -> list[list[float]]:
 
 
 class HybridEmbedSearchServiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_embedding_limiter_is_shared_within_event_loop(self) -> None:
+        first = shared_embedding_semaphore(3)
+        second = shared_embedding_semaphore(3)
+
+        self.assertIs(first, second)
+        self.assertIsNot(first, shared_embedding_semaphore(2))
+
     async def test_rank_chunks_hybrid_combines_bm25_and_dense_scores(self) -> None:
         chunks = [
             {

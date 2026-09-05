@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from tinysearch.services.site_crawl_service import (
     BOILERPLATE_EXCLUDED_TAGS,
+    BrowserCrawlerSession,
     _crawler_config_for_fit_markdown,
     _lightweight_browser_config,
+    fetch_html_for_query,
 )
 
 
@@ -82,6 +87,86 @@ class CrawlerConfigBoilerplateExclusionTests(unittest.TestCase):
             pruning_threshold=0.48,
         )
         self.assertEqual(config.excluded_tags, BOILERPLATE_EXCLUDED_TAGS)
+
+
+class BrowserCrawlerSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reuses_started_crawler_until_shutdown(self) -> None:
+        crawler = MagicMock()
+        crawler.start = AsyncMock()
+        crawler.close = AsyncMock()
+        session = BrowserCrawlerSession()
+
+        with patch(
+            "tinysearch.services.site_crawl_service.create_browser_crawler",
+            return_value=crawler,
+        ) as create:
+            async with session.lease({"browser_idle_shutdown_seconds": 10}):
+                pass
+            async with session.lease({"browser_idle_shutdown_seconds": 10}):
+                pass
+            await session.close()
+
+        create.assert_called_once()
+        crawler.start.assert_awaited_once()
+        crawler.close.assert_awaited_once()
+
+    async def test_fetch_uses_configured_fit_mode_and_threshold(self) -> None:
+        run_config = object()
+        crawler = MagicMock()
+        crawler.arun = AsyncMock(
+            return_value=SimpleNamespace(
+                url="https://example.com",
+                html="<p>evidence</p>",
+                markdown=SimpleNamespace(
+                    raw_markdown="evidence",
+                    fit_markdown="filtered evidence",
+                ),
+                metadata={},
+            )
+        )
+        with patch(
+            "tinysearch.services.site_crawl_service._crawl4ai_stack",
+            return_value=tuple(MagicMock() for _ in range(6)),
+        ), patch(
+            "tinysearch.services.site_crawl_service._crawler_config_for_fit_markdown",
+            return_value=run_config,
+        ) as build_config:
+            result = await fetch_html_for_query(
+                "https://example.com",
+                "query",
+                fit_markdown_mode="pruning",
+                pruning_threshold=0.33,
+                crawler=crawler,
+            )
+
+        build_config.assert_called_once_with(
+            fit_markdown_mode="pruning",
+            user_query="query",
+            bm25_threshold=1.5,
+            bm25_language="english",
+            pruning_threshold=0.33,
+        )
+        crawler.arun.assert_awaited_once_with(
+            url="https://example.com", config=run_config
+        )
+        self.assertEqual(result["markdown_fit"], "filtered evidence")
+
+    async def test_closes_crawler_after_idle_period(self) -> None:
+        crawler = MagicMock()
+        crawler.start = AsyncMock()
+        crawler.close = AsyncMock()
+        session = BrowserCrawlerSession()
+
+        with patch(
+            "tinysearch.services.site_crawl_service.create_browser_crawler",
+            return_value=crawler,
+        ):
+            async with session.lease({"browser_idle_shutdown_seconds": 0.01}):
+                pass
+            await asyncio.sleep(0.03)
+
+        self.assertFalse(session.started)
+        crawler.close.assert_awaited_once()
 
 
 if __name__ == "__main__":
