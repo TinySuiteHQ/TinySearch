@@ -163,7 +163,9 @@ class BrowserCrawlerSessionTests(unittest.IsolatedAsyncioTestCase):
         ):
             async with session.lease({"browser_idle_shutdown_seconds": 0.01}):
                 pass
-            await asyncio.sleep(0.03)
+            idle_task = session._idle_task
+            assert idle_task is not None
+            await asyncio.wait_for(idle_task, timeout=5)
 
         self.assertFalse(session.started)
         crawler.close.assert_awaited_once()
