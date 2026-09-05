@@ -181,7 +181,8 @@ def cap(text: str, char_budget: int) -> str:
         return text
     return (
         text[:char_budget]
-        + f"\n\n[tinysearch: truncated at {char_budget} of {len(text)} characters. "
+        + f"\n\n[tinysearch: showing the first {char_budget} of {len(text)} characters -- "
+        "everything above this line is complete, everything after it was cut off. "
         "Pass find= to return only the matching nodes, or a smaller depth.]"
     )
 

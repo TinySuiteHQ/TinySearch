@@ -56,7 +56,8 @@ class CapTests(unittest.TestCase):
     def test_oversized_text_is_trimmed_and_suggests_a_cheaper_call(self) -> None:
         result = bt.cap("y" * 5000, 100)
         self.assertTrue(result.startswith("y" * 100))
-        self.assertIn("truncated at 100 of 5000", result)
+        self.assertIn("showing the first 100 of 5000", result)
+        self.assertIn("everything after it was cut off", result)
         self.assertIn("smaller depth", result)
 
 
@@ -323,7 +324,7 @@ class CallToolTests(unittest.IsolatedAsyncioTestCase):
         config = normalize_config({"browser_response_char_budget": 50})
         with patch.object(bt, "get_session", return_value=session):
             result = await bt.call_tool("navigate", config, url="https://example.com")
-        self.assertIn("truncated at 50 of 900", result)
+        self.assertIn("showing the first 50 of 900", result)
 
 
 class ToolRegistrationTests(unittest.TestCase):
