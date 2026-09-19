@@ -17,6 +17,7 @@ class PlaywrightRuntimeTests(unittest.IsolatedAsyncioTestCase):
         chromium.launch = AsyncMock(return_value=browser)
         chromium.connect_over_cdp = AsyncMock()
         driver = MagicMock(chromium=chromium)
+        driver.stop = AsyncMock()
         manager = MagicMock()
         manager.start = AsyncMock(return_value=driver)
 

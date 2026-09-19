@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
 import re
 import sys
@@ -590,6 +591,100 @@ def _create_openai_compatible_embedder(env_path: Path) -> Callable[[list[str]], 
             return vectors
 
     return embedder
+
+
+class BatchingEmbedder:
+    """Deduplicate and coalesce embedding inputs within one scrape batch."""
+
+    def __init__(
+        self,
+        embedder: Callable[[list[str]], Any],
+        *,
+        flush_delay_seconds: float = 0.002,
+    ) -> None:
+        self._embedder = embedder
+        self._flush_delay_seconds = max(0.0, float(flush_delay_seconds))
+        self._cache: dict[str, list[float]] = {}
+        self._inflight: dict[str, asyncio.Future[list[float]]] = {}
+        self._queue: list[str] = []
+        self._flush_task: asyncio.Task[None] | None = None
+        self.manages_concurrency = True
+
+    async def __call__(self, inputs: list[str]) -> list[list[float]]:
+        if not inputs:
+            return []
+
+        loop = asyncio.get_running_loop()
+        slots: list[list[float] | asyncio.Future[list[float]]] = []
+        for text in inputs:
+            if text in self._cache:
+                slots.append(self._cache[text])
+                continue
+
+            future = self._inflight.get(text)
+            if future is None:
+                future = loop.create_future()
+                self._inflight[text] = future
+                self._queue.append(text)
+            slots.append(future)
+
+        if self._queue and (self._flush_task is None or self._flush_task.done()):
+            self._flush_task = asyncio.create_task(self._flush())
+
+        vectors: list[list[float]] = []
+        for slot in slots:
+            vector = await slot if isinstance(slot, asyncio.Future) else slot
+            vectors.append(list(vector))
+        return vectors
+
+    async def _flush(self) -> None:
+        if self._flush_delay_seconds:
+            await asyncio.sleep(self._flush_delay_seconds)
+        else:
+            await asyncio.sleep(0)
+
+        while self._queue:
+            texts = list(dict.fromkeys(self._queue))
+            self._queue.clear()
+            try:
+                value = self._embedder(texts)
+                if inspect.isawaitable(value):
+                    value = await value
+                batch_vectors = [list(vector) for vector in value]
+                if len(batch_vectors) != len(texts):
+                    raise ValueError(
+                        f"embedder returned {len(batch_vectors)} embeddings for "
+                        f"{len(texts)} batched inputs"
+                    )
+            except Exception as exc:
+                for text in texts:
+                    future = self._inflight.pop(text, None)
+                    if future is not None and not future.done():
+                        future.set_exception(exc)
+                continue
+
+            for text, vector in zip(texts, batch_vectors, strict=True):
+                self._cache[text] = vector
+                future = self._inflight.pop(text, None)
+                if future is not None and not future.done():
+                    future.set_result(vector)
+
+            # Give other concurrent page rankers one scheduling turn to enqueue
+            # their next document batch before deciding whether another flush is needed.
+            await asyncio.sleep(0)
+
+        self._flush_task = None
+
+
+def create_batching_embedder(
+    embedder: Callable[[list[str]], Any],
+    *,
+    flush_delay_seconds: float = 0.002,
+) -> BatchingEmbedder:
+    return BatchingEmbedder(
+        embedder,
+        flush_delay_seconds=flush_delay_seconds,
+    )
 
 
 # ---------------------------------------------------------------------------

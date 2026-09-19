@@ -101,10 +101,6 @@ async def _fake_html_page(*, url, user_query):
             "# Section B\n\nBread recipes use flour and yeast.\n\n"
             "# Section C\n\nAnother paragraph about async."
         ),
-        "markdown_fit": (
-            "# Section A\n\nPython asyncio guide explains async tasks.\n\n"
-            "# Section C\n\nAnother paragraph about async."
-        ),
         "metadata": {
             "title": "Example Article",
             "description": "A short description",
@@ -135,7 +131,6 @@ async def _fake_html_empty(*, url, user_query):
         "final_url": url,
         "html": "",
         "markdown_raw": "",
-        "markdown_fit": "",
         "metadata": {},
     }
 
@@ -156,9 +151,6 @@ async def _fake_html_page_with_links(*, url, user_query):
         "markdown_raw": (
             "# Section A\n\nPython asyncio guide explains async tasks."
         ),
-        "markdown_fit": (
-            "# Section A\n\nPython asyncio guide explains async tasks."
-        ),
         "metadata": {"title": "Example Article"},
     }
 
@@ -174,9 +166,6 @@ async def _fake_html_page_many_links(*, url, user_query):
             "</body></html>"
         ),
         "markdown_raw": (
-            "# Section A\n\nPython asyncio guide explains async tasks."
-        ),
-        "markdown_fit": (
             "# Section A\n\nPython asyncio guide explains async tasks."
         ),
         "metadata": {"title": "Example Article"},
@@ -195,9 +184,6 @@ async def _fake_html_page_image_only_links(*, url, user_query):
         "final_url": url,
         "html": f"<html><head></head><body>{filler}</body></html>",
         "markdown_raw": (
-            "# Section A\n\nPython asyncio guide explains async tasks."
-        ),
-        "markdown_fit": (
             "# Section A\n\nPython asyncio guide explains async tasks."
         ),
         "metadata": {"title": "Example Article"},
@@ -263,7 +249,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bm25_score", result.chunks[0])
         self.assertIn("rrf_score", result.chunks[0])
 
-    async def test_focused_scrape_embeds_query_once_for_links_and_content(self) -> None:
+    async def test_related_links_do_not_add_embedding_work(self) -> None:
         embedded_inputs: list[str] = []
 
         async def recording_embedder(inputs: list[str]) -> list[list[float]]:
@@ -284,28 +270,8 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
 
         prefix = normalize_config(_config())["dense_query_prefix"]
         self.assertEqual(embedded_inputs.count(f"{prefix}async"), 1)
-
-    async def test_focused_scrape_ignores_legacy_fit_markdown(self) -> None:
-        async def page_with_legacy_fit(*, url, user_query):
-            page = await _fake_html_page(url=url, user_query=user_query)
-            page["markdown_raw"] = "RAW SOURCE evidence about async."
-            page["markdown_fit"] = "SHOULD NEVER BE USED"
-            return page
-
-        with patch(
-            "tinysearch.pipelines.scrape.assert_url_is_fetchable",
-            side_effect=_fake_safe_url,
-        ):
-            result = await scrape_url(
-                "https://example.com/article",
-                "async",
-                config=_config(),
-                crawl_fn=page_with_legacy_fit,
-            )
-
-        combined = "".join(chunk["text"] for chunk in result.chunks)
-        self.assertIn("RAW SOURCE", combined)
-        self.assertNotIn("SHOULD NEVER BE USED", combined)
+        self.assertFalse(any("Async Guide" in text for text in embedded_inputs))
+        self.assertFalse(any("Bread Recipes" in text for text in embedded_inputs))
 
     async def test_focused_scrape_caps_page_before_chunk_embedding(self) -> None:
         async def long_page(*, url, user_query):
@@ -391,7 +357,6 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
                 "final_url": url,
                 "html": "<html><head><title>T</title></head></html>",
                 "markdown_raw": "Hello world content about async.",
-                "markdown_fit": "Hello world content about async.",
                 "metadata": {"title": "T", "description": "only this"},
             }
 
@@ -531,11 +496,10 @@ class ScrapeUrlLinksTests(unittest.IsolatedAsyncioTestCase):
             {"https://example.com/async-guide", "https://example.com/bread-recipes"},
         )
 
-    async def test_relevant_link_beyond_candidate_pool_still_surfaces(self) -> None:
-        # 150 irrelevant filler links precede the one relevant link in DOM
-        # order, well past the internal candidate-pool cap; a naive
-        # DOM-order truncation before ranking would drop it before it's
-        # ever scored. The BM25 pre-filter must pull it into the pool.
+    async def test_bm25_ranks_relevant_link_across_full_link_set(self) -> None:
+        # 150 irrelevant filler links precede the relevant link in DOM order.
+        # BM25 scores the complete candidate set directly, with no dense rerank
+        # and no pre-ranking candidate cap.
         with patch(
             "tinysearch.pipelines.scrape.assert_url_is_fetchable",
             side_effect=_fake_safe_url,
@@ -551,13 +515,11 @@ class ScrapeUrlLinksTests(unittest.IsolatedAsyncioTestCase):
         urls = [link["url"] for link in result.links]
         self.assertIn("https://example.com/async-guide", urls)
 
-    async def test_image_only_links_beyond_pool_do_not_crash_bm25_prefilter(
+    async def test_image_only_links_do_not_crash_bm25_ranking(
         self,
     ) -> None:
-        # 150 image-only anchors with no alt text or surrounding text push
-        # the candidate pool past the BM25 pre-filter's cap while every
-        # candidate tokenizes to an empty string; the pre-filter must fall
-        # back to DOM order instead of dividing by a zero average doc length.
+        # Every candidate tokenizes to an empty string; link ranking must
+        # fall back to DOM order instead of constructing an invalid BM25 corpus.
         with patch(
             "tinysearch.pipelines.scrape.assert_url_is_fetchable",
             side_effect=_fake_safe_url,
@@ -660,7 +622,6 @@ class ScrapeUrlBudgetTests(unittest.IsolatedAsyncioTestCase):
                 "final_url": url,
                 "html": "",
                 "markdown_raw": long_text,
-                "markdown_fit": long_text,
                 "metadata": {"title": "Long"},
             }
 

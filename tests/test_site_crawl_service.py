@@ -8,6 +8,7 @@ from tinysearch.services.site_crawl_service import (
     BrowserCrawlerSession,
     DirectPlaywrightCrawler,
     _accessibility_text,
+    _route_scrape_request,
     fetch_html_for_query,
 )
 
@@ -46,6 +47,7 @@ class DirectPlaywrightCrawlerTests(unittest.IsolatedAsyncioTestCase):
         page.content = AsyncMock(return_value="<html><body>evidence</body></html>")
         page.title = AsyncMock(return_value="Example")
         context = MagicMock()
+        context.route = AsyncMock()
         context.new_page = AsyncMock(return_value=page)
         context.close = AsyncMock()
 
@@ -63,7 +65,30 @@ class DirectPlaywrightCrawlerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["markdown_raw"], "- paragraph: evidence")
         self.assertEqual(result["metadata"]["title"], "Example")
         self.assertEqual(result["metadata"]["status"], 200)
+        context.route.assert_awaited_once_with("**/*", _route_scrape_request)
         context.close.assert_awaited_once()
+
+    async def test_scrape_route_blocks_only_non_text_resources(self) -> None:
+        for resource_type in ("image", "media", "font"):
+            route = MagicMock()
+            route.request.resource_type = resource_type
+            route.abort = AsyncMock()
+            route.continue_ = AsyncMock()
+
+            await _route_scrape_request(route)
+
+            route.abort.assert_awaited_once()
+            route.continue_.assert_not_awaited()
+
+        route = MagicMock()
+        route.request.resource_type = "script"
+        route.abort = AsyncMock()
+        route.continue_ = AsyncMock()
+
+        await _route_scrape_request(route)
+
+        route.abort.assert_not_awaited()
+        route.continue_.assert_awaited_once()
 
     async def test_fetch_keeps_old_signature_but_does_not_prefilter(self) -> None:
         crawler = MagicMock()
@@ -73,7 +98,6 @@ class DirectPlaywrightCrawlerTests(unittest.IsolatedAsyncioTestCase):
                 "redirected_url": "https://example.com/final",
                 "html": "<p>evidence</p>",
                 "markdown_raw": "- paragraph: evidence",
-                "markdown_fit": "",
                 "metadata": {"title": "Example"},
             }
         )
@@ -89,7 +113,6 @@ class DirectPlaywrightCrawlerTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["final_url"], "https://example.com/final")
         self.assertEqual(result["markdown_raw"], "- paragraph: evidence")
-        self.assertEqual(result["markdown_fit"], "")
 
 
 class BrowserCrawlerSessionTests(unittest.IsolatedAsyncioTestCase):

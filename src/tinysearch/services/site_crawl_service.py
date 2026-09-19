@@ -21,9 +21,6 @@ from tinysearch.services.token_counter_service import (
 )
 from tinysearch.telemetry import span_scope
 
-BOILERPLATE_EXCLUDED_TAGS: list[str] = ["nav", "header", "footer", "aside"]
-
-
 def ensure_utf8_stdio() -> None:
     for stream in (sys.stdout, sys.stderr):
         try:
@@ -45,16 +42,15 @@ def _truncate_to_max_tokens(
     return decode_tokens(tokens[:max_return_tokens], encoding_name)
 
 
-def _pick_markdown_for_chunking(
-    markdown_raw: str,
-    markdown_fit: str,
-    fit_min_chars: int,
-) -> tuple[str, str]:
-    """Prefer fitted text when supplied, otherwise use the raw representation."""
-    fit_stripped = markdown_fit.strip()
-    if len(fit_stripped) >= fit_min_chars:
-        return fit_stripped, "fit"
-    return markdown_raw.strip(), "raw"
+_BLOCKED_SCRAPE_RESOURCE_TYPES = frozenset({"image", "media", "font"})
+
+
+async def _route_scrape_request(route: Any) -> None:
+    """Skip bytes that cannot contribute to text retrieval."""
+    if route.request.resource_type in _BLOCKED_SCRAPE_RESOURCE_TYPES:
+        await route.abort()
+        return
+    await route.continue_()
 
 
 async def _accessibility_text(page: Any) -> str:
@@ -92,6 +88,7 @@ class DirectPlaywrightCrawler:
         del config
         context = await self._runtime.new_context()
         try:
+            await context.route("**/*", _route_scrape_request)
             page = await context.new_page()
             response = await page.goto(url, wait_until="domcontentloaded")
             html = await page.content()
@@ -105,7 +102,6 @@ class DirectPlaywrightCrawler:
                 "redirected_url": page.url or url,
                 "html": html,
                 "markdown_raw": text,
-                "markdown_fit": "",
                 "metadata": {
                     "title": title,
                     "status": getattr(response, "status", None) if response else None,
@@ -329,7 +325,6 @@ async def fetch_html_for_query(
         "final_url": str(final_url),
         "html": str(_result_field(result, "html", "") or ""),
         "markdown_raw": str(_result_field(result, "markdown_raw", "") or ""),
-        "markdown_fit": "",
         "metadata": metadata,
     }
 
@@ -357,7 +352,6 @@ async def crawl(
         "html": page["html"],
         "markdown_raw": markdown_raw,
         "markdown": markdown_body,
-        "markdown_fit": "",
         "markdown_source": markdown_source,
         "tokens_raw": token_count(markdown_raw, encoding_name),
     }
@@ -407,9 +401,7 @@ async def crawl_search(
         "query": user_query,
         "html": html,
         "markdown_raw": markdown_raw,
-        "markdown_fit": "",
         "tokens_raw": token_count(markdown_raw, encoding_name),
-        "tokens_fit": 0,
         "chunks_total": len(chunks),
         "chunks": chunks,
         "ranked_chunks": ranked_chunks,
