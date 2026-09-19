@@ -256,17 +256,16 @@ class SessionBehaviourTests(unittest.IsolatedAsyncioTestCase):
         session = self._session(browser_idle_shutdown_seconds=0.01)
         context = session._context
         context.close = AsyncMock()
-        browser = MagicMock(close=AsyncMock())
-        playwright = MagicMock(stop=AsyncMock())
-        session._browser = browser
-        session._playwright = playwright
+        session._runtime.persist_storage_state = AsyncMock()
+        session._runtime.close = AsyncMock()
 
         session.schedule_idle_shutdown()
         await asyncio.sleep(0.03)
 
         self.assertFalse(session.started)
         context.close.assert_awaited_once()
-        browser.close.assert_awaited_once()
+        session._runtime.persist_storage_state.assert_awaited_once_with(context)
+        session._runtime.close.assert_awaited_once()
 
 
 class ResolveActArgumentsTests(unittest.TestCase):

@@ -12,6 +12,7 @@ from docx import Document
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
+from tinysearch.services.browser_runtime_service import PlaywrightRuntime
 from tinysearch.services.text_chunking_service import chunk_text
 from tinysearch.services.token_counter_service import (
     decode_tokens,
@@ -72,34 +73,13 @@ class DirectPlaywrightCrawler:
     """Reusable renderer exposing only the crawler contract TinySearch needs."""
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
-        self._config = dict(config or {})
-        self._playwright: Any = None
-        self._browser: Any = None
-        self._owns_browser = True
+        self._runtime = PlaywrightRuntime(config)
 
     async def start(self) -> None:
-        if self._browser is not None:
-            return
-        from playwright.async_api import async_playwright
-
-        self._playwright = await async_playwright().start()
-        cdp_url = str(self._config.get("browser_cdp_url") or "").strip()
-        if cdp_url:
-            self._browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
-            self._owns_browser = False
-        else:
-            self._browser = await self._playwright.chromium.launch(headless=True)
-            self._owns_browser = True
+        await self._runtime.start()
 
     async def close(self) -> None:
-        browser, self._browser = self._browser, None
-        playwright, self._playwright = self._playwright, None
-        if browser is not None and self._owns_browser:
-            with suppress(Exception):
-                await browser.close()
-        if playwright is not None:
-            with suppress(Exception):
-                await playwright.stop()
+        await self._runtime.close()
 
     async def __aenter__(self) -> "DirectPlaywrightCrawler":
         await self.start()
@@ -108,27 +88,9 @@ class DirectPlaywrightCrawler:
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         await self.close()
 
-    def _storage_state_path(self) -> str | None:
-        raw = str(self._config.get("browser_storage_state_path") or "").strip()
-        if not raw:
-            return None
-        from pathlib import Path
-
-        path = Path(raw)
-        return str(path) if path.is_file() else None
-
     async def arun(self, *, url: str, config: Any = None) -> dict[str, Any]:
         del config
-        await self.start()
-        if self._browser is None:
-            raise RuntimeError("Playwright browser failed to start")
-
-        context_options: dict[str, Any] = {"locale": "en-US"}
-        storage_state = self._storage_state_path()
-        if storage_state is not None:
-            context_options["storage_state"] = storage_state
-
-        context = await self._browser.new_context(**context_options)
+        context = await self._runtime.new_context()
         try:
             page = await context.new_page()
             response = await page.goto(url, wait_until="domcontentloaded")

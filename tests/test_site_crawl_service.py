@@ -50,8 +50,8 @@ class DirectPlaywrightCrawlerTests(unittest.IsolatedAsyncioTestCase):
         context.close = AsyncMock()
 
         crawler = DirectPlaywrightCrawler()
-        crawler._browser = MagicMock()
-        crawler._browser.new_context = AsyncMock(return_value=context)
+        crawler._runtime = MagicMock()
+        crawler._runtime.new_context = AsyncMock(return_value=context)
 
         with patch(
             "tinysearch.services.site_crawl_service._accessibility_text",
