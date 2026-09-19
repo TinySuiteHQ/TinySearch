@@ -83,8 +83,6 @@ def _config(**overrides) -> dict:
         "pipeline_timeout_seconds": 120.0,
         "crawl_max_chunk_tokens": 500,
         "crawl_overlap_tokens": 80,
-        "crawl_bm25_threshold": 1.5,
-        "crawl_bm25_language": "english",
     }
     base.update(overrides)
     return base
@@ -94,7 +92,7 @@ def _fake_safe_url(url, blocked_domains):
     return url
 
 
-async def _fake_html_page(*, url, user_query, bm25_threshold, bm25_language):
+async def _fake_html_page(*, url, user_query):
     return {
         "final_url": url,
         "html": "<html><head><title>Example Article</title></head><body></body></html>",
@@ -116,23 +114,23 @@ async def _fake_html_page(*, url, user_query, bm25_threshold, bm25_language):
     }
 
 
-async def _fake_html_redirected(*, url, user_query, bm25_threshold, bm25_language):
+async def _fake_html_redirected(*, url, user_query):
     page = await _fake_html_page(
-        url=url, user_query=user_query, bm25_threshold=bm25_threshold, bm25_language=bm25_language
+        url=url, user_query=user_query
     )
     page["final_url"] = "https://redirected.example/x"
     return page
 
 
-async def _fake_html_redirect_to_blocked(*, url, user_query, bm25_threshold, bm25_language):
+async def _fake_html_redirect_to_blocked(*, url, user_query):
     page = await _fake_html_page(
-        url=url, user_query=user_query, bm25_threshold=bm25_threshold, bm25_language=bm25_language
+        url=url, user_query=user_query
     )
     page["final_url"] = "https://blocked.example/x"
     return page
 
 
-async def _fake_html_empty(*, url, user_query, bm25_threshold, bm25_language):
+async def _fake_html_empty(*, url, user_query):
     return {
         "final_url": url,
         "html": "",
@@ -142,7 +140,7 @@ async def _fake_html_empty(*, url, user_query, bm25_threshold, bm25_language):
     }
 
 
-async def _fake_html_page_with_links(*, url, user_query, bm25_threshold, bm25_language):
+async def _fake_html_page_with_links(*, url, user_query):
     return {
         "final_url": url,
         "html": (
@@ -165,7 +163,7 @@ async def _fake_html_page_with_links(*, url, user_query, bm25_threshold, bm25_la
     }
 
 
-async def _fake_html_page_many_links(*, url, user_query, bm25_threshold, bm25_language):
+async def _fake_html_page_many_links(*, url, user_query):
     filler = "".join(f'<a href="/filler-{i}">Filler {i}</a>' for i in range(150))
     return {
         "final_url": url,
@@ -185,7 +183,7 @@ async def _fake_html_page_many_links(*, url, user_query, bm25_threshold, bm25_la
     }
 
 
-async def _fake_html_page_image_only_links(*, url, user_query, bm25_threshold, bm25_language):
+async def _fake_html_page_image_only_links(*, url, user_query):
     # No <title>, alt text, or surrounding text, so every link's
     # `text`/`context` tokenizes to nothing -- an all-empty BM25 corpus.
     # (A page <title> would otherwise leak into every link's leading
@@ -287,16 +285,11 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
         prefix = normalize_config(_config())["dense_query_prefix"]
         self.assertEqual(embedded_inputs.count(f"{prefix}async"), 1)
 
-    async def test_focused_scrape_uses_raw_markdown_when_fit_is_too_short(self) -> None:
-        async def short_fit(*, url, user_query, bm25_threshold, bm25_language):
-            page = await _fake_html_page(
-                url=url,
-                user_query=user_query,
-                bm25_threshold=bm25_threshold,
-                bm25_language=bm25_language,
-            )
-            page["markdown_raw"] = "RAW FALLBACK evidence about async."
-            page["markdown_fit"] = "async"
+    async def test_focused_scrape_ignores_legacy_fit_markdown(self) -> None:
+        async def page_with_legacy_fit(*, url, user_query):
+            page = await _fake_html_page(url=url, user_query=user_query)
+            page["markdown_raw"] = "RAW SOURCE evidence about async."
+            page["markdown_fit"] = "SHOULD NEVER BE USED"
             return page
 
         with patch(
@@ -306,21 +299,21 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
             result = await scrape_url(
                 "https://example.com/article",
                 "async",
-                config=_config(crawl_fit_min_chars=20),
-                crawl_fn=short_fit,
+                config=_config(),
+                crawl_fn=page_with_legacy_fit,
             )
 
-        self.assertIn("RAW FALLBACK", result.chunks[0]["text"])
+        combined = "".join(chunk["text"] for chunk in result.chunks)
+        self.assertIn("RAW SOURCE", combined)
+        self.assertNotIn("SHOULD NEVER BE USED", combined)
 
     async def test_focused_scrape_caps_page_before_chunk_embedding(self) -> None:
-        async def long_page(*, url, user_query, bm25_threshold, bm25_language):
+        async def long_page(*, url, user_query):
             page = await _fake_html_page(
                 url=url,
                 user_query=user_query,
-                bm25_threshold=bm25_threshold,
-                bm25_language=bm25_language,
             )
-            page["markdown_fit"] = "async evidence " * 100 + "TAIL_SENTINEL"
+            page["markdown_raw"] = "async evidence " * 100 + "TAIL_SENTINEL"
             return page
 
         with patch(
@@ -330,7 +323,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
             result = await scrape_url(
                 "https://example.com/article",
                 "async",
-                config=_config(crawl_max_page_tokens=20, crawl_fit_min_chars=0),
+                config=_config(crawl_max_page_tokens=20),
                 crawl_fn=long_page,
             )
 
@@ -393,7 +386,7 @@ class ScrapeUrlHappyPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("metadata", result.to_response(include_metadata=False))
 
     async def test_metadata_partial_fills_with_none(self) -> None:
-        async def _fake_partial(*, url, user_query, bm25_threshold, bm25_language):
+        async def _fake_partial(*, url, user_query):
             return {
                 "final_url": url,
                 "html": "<html><head><title>T</title></head></html>",
@@ -662,7 +655,7 @@ class ScrapeUrlBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def test_single_oversized_chunk_is_truncated_at_token_level(self) -> None:
         long_text = "Python asyncio. " * 200
 
-        async def _fake_long(*, url, user_query, bm25_threshold, bm25_language):
+        async def _fake_long(*, url, user_query):
             return {
                 "final_url": url,
                 "html": "",
@@ -775,7 +768,7 @@ class ScrapeUrlErrorMappingTests(unittest.IsolatedAsyncioTestCase):
     async def test_crawl_timeout_raises_fetch_timeout(self) -> None:
         import asyncio
 
-        async def _slow(*, url, user_query, bm25_threshold, bm25_language):
+        async def _slow(*, url, user_query):
             raise asyncio.TimeoutError("slow")
 
         with patch(
@@ -791,7 +784,7 @@ class ScrapeUrlErrorMappingTests(unittest.IsolatedAsyncioTestCase):
                 )
 
     async def test_crawl_generic_failure_raises_fetch_failed(self) -> None:
-        async def _boom(*, url, user_query, bm25_threshold, bm25_language):
+        async def _boom(*, url, user_query):
             raise RuntimeError("crawler died")
 
         with patch(

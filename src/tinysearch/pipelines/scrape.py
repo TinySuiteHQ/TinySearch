@@ -38,7 +38,6 @@ from tinysearch.services.scrape_service import (
 )
 from tinysearch.services.token_counter_service import decode_tokens, encode_tokens
 from tinysearch.services.site_crawl_service import (
-    _pick_markdown_for_chunking,
     extract_document_text,
     fetch_html_for_query,
     is_document_url,
@@ -201,7 +200,7 @@ async def run_scrape_pipeline(
     Omitted, blank, and ``'*'`` queries select raw page-order extraction; any
     other non-empty query enables the existing focused chunk-ranking path.
 
-    Pass `crawler` (an already-started AsyncWebCrawler, see
+    Pass `crawler` (an already-started direct Playwright crawler, see
     site_crawl_service.create_browser_crawler()) to reuse one browser across
     several pipeline calls instead of launching a fresh one per call.
     """
@@ -255,13 +254,7 @@ async def run_scrape_pipeline(
             fetch_telemetry.complete()
     else:
         if crawl_fn is None:
-            crawl_fn = partial(
-                fetch_html_for_query,
-                fit_markdown_mode=(
-                    "off" if raw_page_order else resolved["crawl_fit_markdown_mode"]
-                ),
-                pruning_threshold=resolved["crawl_pruning_threshold"],
-            )
+            crawl_fn = fetch_html_for_query
         with span_scope(
             "tinysearch.fetch",
             attributes={"tinysearch.browser.used": True, "tinysearch.document.type": "html"},
@@ -270,8 +263,6 @@ async def run_scrape_pipeline(
             page = await fetch_html_with_timeout(
                 url=safe_url,
                 query=None if raw_page_order else cleaned_query,
-                bm25_threshold=resolved["crawl_bm25_threshold"],
-                bm25_language=resolved["crawl_bm25_language"],
                 timeout_seconds=fetch_timeout_seconds,
                 crawl_fn=crawl_fn,
                 crawler=crawler,
@@ -293,16 +284,7 @@ async def run_scrape_pipeline(
                 result_count=len(candidate_links),
                 attributes={"tinysearch.link.candidate.count": len(candidate_links)},
             )
-        markdown_raw = str(page.get("markdown_raw") or "")
-        markdown_fit = str(page.get("markdown_fit") or "")
-        if raw_page_order:
-            markdown = markdown_raw
-        else:
-            markdown, _markdown_source = _pick_markdown_for_chunking(
-                markdown_raw,
-                markdown_fit,
-                int(resolved["crawl_fit_min_chars"]),
-            )
+        markdown = str(page.get("markdown_raw") or "")
 
     if not markdown or not markdown.strip():
         raise EmptyContentError(f"no readable content extracted from {final_url}")

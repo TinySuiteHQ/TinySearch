@@ -1,4 +1,4 @@
-"""Ensure Chromium is installed for crawl4ai/Playwright, on demand or at startup."""
+"""Ensure Playwright Chromium is installed, on demand or at startup."""
 
 from __future__ import annotations
 

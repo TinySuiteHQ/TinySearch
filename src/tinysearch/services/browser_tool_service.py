@@ -1,9 +1,9 @@
 """Browser automation implemented directly on Playwright's Python API.
 
-TinySearch already depends on Playwright (through Crawl4AI) and already
-installs its Chromium, so browser automation needs no second runtime, no
-second browser, and no child process: the tools below are thin adapters over
-the same driver the scrape pipeline uses.
+TinySearch uses Playwright directly for both scraping and browser automation,
+so the tools below are thin adapters over the same browser API and installed
+Chromium runtime as the scrape pipeline. Interactive sessions remain isolated
+from concurrent scrape contexts.
 
 What makes this workable is Playwright's own accessibility snapshot. It
 labels every node with a stable `[ref=eNN]`, and the `aria-ref=` selector

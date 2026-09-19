@@ -246,7 +246,7 @@ _crawler_session: BrowserCrawlerSession | None = None
 
 @asynccontextmanager
 async def _mcp_lifespan(_server: FastMCP):
-    """Keep Crawl4AI warm within the MCP event loop and close it cleanly."""
+    """Keep the shared Playwright scraper warm within the MCP event loop and close it cleanly."""
     global _crawler_session
     _crawler_session = BrowserCrawlerSession()
     try:

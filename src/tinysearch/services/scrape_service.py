@@ -204,8 +204,6 @@ async def fetch_html_with_timeout(
     *,
     url: str,
     query: str | None,
-    bm25_threshold: float,
-    bm25_language: str,
     timeout_seconds: float,
     crawl_fn: HtmlCrawlFn,
     crawler: Any | None = None,
@@ -215,8 +213,6 @@ async def fetch_html_with_timeout(
             kwargs: dict[str, Any] = {
                 "url": url,
                 "user_query": query,
-                "bm25_threshold": bm25_threshold,
-                "bm25_language": bm25_language,
             }
             if crawler is not None:
                 kwargs["crawler"] = crawler

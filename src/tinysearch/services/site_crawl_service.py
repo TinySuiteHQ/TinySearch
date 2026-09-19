@@ -4,7 +4,6 @@ import sys
 import tempfile
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
-from functools import lru_cache
 from typing import Any
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -21,43 +20,7 @@ from tinysearch.services.token_counter_service import (
 )
 from tinysearch.telemetry import span_scope
 
-DEFAULT_MARKDOWN_GENERATOR_OPTIONS: dict[str, Any] = {
-    "ignore_links": True,
-    "ignore_images": True,
-    "skip_internal_links": True,
-    "body_width": 0,
-}
-
-# Semantic HTML5 chrome tags stripped before markdown generation / content
-# filtering runs. Without this, nav menus and header/footer boilerplate can
-# outscore a BM25 content filter's relevance threshold on some sites (the
-# filter operates on Crawl4AI's block segmentation, and a short nav block can
-# survive at any threshold) and leak into the fitted markdown ahead of the
-# actual article content. Removing the elements at the DOM level, before
-# markdown/filtering even runs, is the correct fix -- confirmed empirically
-# that no relevance threshold in [1.5, 4.0] filtered this content, while
-# excluding these tags removed it cleanly on every test site without
-# truncating real article content. Does not catch every kind of boilerplate
-# (e.g. an inline login-CTA banner not wrapped in one of these tags), just
-# the common semantically-tagged chrome.
 BOILERPLATE_EXCLUDED_TAGS: list[str] = ["nav", "header", "footer", "aside"]
-
-
-@lru_cache(maxsize=1)
-def _crawl4ai_stack() -> tuple[Any, Any, Any, Any, Any, Any]:
-    """Import crawl4ai only when crawling; avoids heavy DLL init before embedding in MCP."""
-    from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
-    from crawl4ai.content_filter_strategy import BM25ContentFilter, PruningContentFilter
-    from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-
-    return (
-        AsyncWebCrawler,
-        BrowserConfig,
-        CrawlerRunConfig,
-        BM25ContentFilter,
-        PruningContentFilter,
-        DefaultMarkdownGenerator,
-    )
 
 
 def ensure_utf8_stdio() -> None:
@@ -66,34 +29,6 @@ def ensure_utf8_stdio() -> None:
             stream.reconfigure(encoding="utf-8")
         except Exception:
             pass
-
-
-def get_markdown_raw(result: Any) -> str:
-    md_obj = getattr(result, "markdown", None)
-
-    if md_obj is None:
-        return ""
-
-    if isinstance(md_obj, str):
-        return md_obj
-
-    return getattr(md_obj, "raw_markdown", "") or ""
-
-
-def get_markdown_fit(result: Any) -> str:
-    md_obj = getattr(result, "markdown", None)
-
-    if md_obj is None:
-        return ""
-
-    if isinstance(md_obj, str):
-        return md_obj
-
-    return getattr(md_obj, "fit_markdown", "") or ""
-
-
-def get_html(result: Any) -> str:
-    return getattr(result, "html", "") or ""
 
 
 def _truncate_to_max_tokens(
@@ -114,115 +49,121 @@ def _pick_markdown_for_chunking(
     markdown_fit: str,
     fit_min_chars: int,
 ) -> tuple[str, str]:
+    """Prefer fitted text when supplied, otherwise use the raw representation."""
     fit_stripped = markdown_fit.strip()
     if len(fit_stripped) >= fit_min_chars:
         return fit_stripped, "fit"
     return markdown_raw.strip(), "raw"
 
 
-def _crawler_config_for_fit_markdown(
-    *,
-    fit_markdown_mode: str,
-    user_query: str | None,
-    bm25_threshold: float,
-    bm25_language: str,
-    pruning_threshold: float,
-) -> Any:
-    _, _, CrawlerRunConfig, BM25ContentFilter, PruningContentFilter, DefaultMarkdownGenerator = (
-        _crawl4ai_stack()
-    )
-    mode = fit_markdown_mode.strip().lower()
-    if mode in ("", "off", "none", "raw"):
-        return CrawlerRunConfig(verbose=False, excluded_tags=BOILERPLATE_EXCLUDED_TAGS)
-    if mode == "bm25":
-        q = (user_query or "").strip()
-        if not q:
-            return CrawlerRunConfig(verbose=False, excluded_tags=BOILERPLATE_EXCLUDED_TAGS)
-        content_filter = BM25ContentFilter(
-            user_query=q,
-            bm25_threshold=bm25_threshold,
-            language=bm25_language,
-        )
-    elif mode == "pruning":
-        content_filter = PruningContentFilter(threshold=pruning_threshold)
-    else:
-        raise ValueError(
-            "fit_markdown_mode must be 'off', 'bm25', or 'pruning', "
-            f"not {fit_markdown_mode!r}"
-        )
-    return CrawlerRunConfig(
-        verbose=False,
-        excluded_tags=BOILERPLATE_EXCLUDED_TAGS,
-        markdown_generator=DefaultMarkdownGenerator(
-            content_filter=content_filter,
-            options=dict(DEFAULT_MARKDOWN_GENERATOR_OPTIONS),
-        )
-    )
+async def _accessibility_text(page: Any) -> str:
+    """Return Playwright AI accessibility text, with visible-text fallback."""
+    body = page.locator("body")
+    try:
+        snapshot = await body.aria_snapshot(mode="ai")
+    except (AttributeError, TypeError):
+        snapshot = ""
+    if snapshot and snapshot.strip():
+        return snapshot.strip()
+    return (await body.inner_text()).strip()
 
 
-def _lightweight_browser_config(
-    BrowserConfig: Any,
-    config: Mapping[str, Any] | None = None,
-) -> Any:
-    """Build BrowserConfig for bundled Chromium or an external CDP browser.
+class DirectPlaywrightCrawler:
+    """Reusable renderer exposing only the crawler contract TinySearch needs."""
 
-    Bundled Chromium keeps JavaScript enabled and uses only
-    non-content-affecting footprint controls:
-    - light_mode: drops crashpad/extensions/sync/translate companion processes
-    - memory_saving_mode: caps each renderer's V8 heap (~512MB) and discards
-      caches aggressively
-    - avoid_ads: blocks known ad/tracker network origins
-    - extra_args: blocks images/fonts at the browser level; we only need text.
-    """
-    cdp_url = str((config or {}).get("browser_cdp_url") or "").strip()
-    if cdp_url:
-        browser_config = BrowserConfig(
-            verbose=False,
-            browser_mode="custom",
-            cdp_url=cdp_url,
-            cdp_cleanup_on_close=True,
-            cdp_close_delay=0,
-            avoid_ads=True,
-        )
-        # Crawl4AI 0.9.2 parses ``user_agent`` during construction and crashes
-        # when it is passed as None, even though BrowserConfig documents None as
-        # supported. Clear both derived fields after construction so setup_context
-        # leaves the external browser's coherent identity untouched.
-        browser_config.user_agent = None
-        browser_config.browser_hint = ""
-        return browser_config
+    def __init__(self, config: Mapping[str, Any] | None = None) -> None:
+        self._config = dict(config or {})
+        self._playwright: Any = None
+        self._browser: Any = None
+        self._owns_browser = True
 
-    return BrowserConfig(
-        verbose=False,
-        light_mode=True,
-        memory_saving_mode=True,
-        avoid_ads=True,
-        extra_args=["--blink-settings=imagesEnabled=false", "--disable-remote-fonts"],
-    )
+    async def start(self) -> None:
+        if self._browser is not None:
+            return
+        from playwright.async_api import async_playwright
+
+        self._playwright = await async_playwright().start()
+        cdp_url = str(self._config.get("browser_cdp_url") or "").strip()
+        if cdp_url:
+            self._browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
+            self._owns_browser = False
+        else:
+            self._browser = await self._playwright.chromium.launch(headless=True)
+            self._owns_browser = True
+
+    async def close(self) -> None:
+        browser, self._browser = self._browser, None
+        playwright, self._playwright = self._playwright, None
+        if browser is not None and self._owns_browser:
+            with suppress(Exception):
+                await browser.close()
+        if playwright is not None:
+            with suppress(Exception):
+                await playwright.stop()
+
+    async def __aenter__(self) -> "DirectPlaywrightCrawler":
+        await self.start()
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        await self.close()
+
+    def _storage_state_path(self) -> str | None:
+        raw = str(self._config.get("browser_storage_state_path") or "").strip()
+        if not raw:
+            return None
+        from pathlib import Path
+
+        path = Path(raw)
+        return str(path) if path.is_file() else None
+
+    async def arun(self, *, url: str, config: Any = None) -> dict[str, Any]:
+        del config
+        await self.start()
+        if self._browser is None:
+            raise RuntimeError("Playwright browser failed to start")
+
+        context_options: dict[str, Any] = {"locale": "en-US"}
+        storage_state = self._storage_state_path()
+        if storage_state is not None:
+            context_options["storage_state"] = storage_state
+
+        context = await self._browser.new_context(**context_options)
+        try:
+            page = await context.new_page()
+            response = await page.goto(url, wait_until="domcontentloaded")
+            html = await page.content()
+            text = await _accessibility_text(page)
+            try:
+                title = await page.title()
+            except Exception:
+                title = ""
+            return {
+                "url": page.url or url,
+                "redirected_url": page.url or url,
+                "html": html,
+                "markdown_raw": text,
+                "markdown_fit": "",
+                "metadata": {
+                    "title": title,
+                    "status": getattr(response, "status", None) if response else None,
+                },
+            }
+        finally:
+            await context.close()
 
 
-def create_browser_crawler(config: Mapping[str, Any] | None = None) -> Any:
-    """Construct an AsyncWebCrawler meant to be reused across many crawl() calls.
-
-    Launching a fresh Chromium browser per crawled URL is the dominant memory
-    cost under concurrent crawling; sharing one browser instance across a
-    batch cuts peak memory substantially while preserving full JS rendering.
-    """
-    AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
-    return AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig, config))
+def create_browser_crawler(config: Mapping[str, Any] | None = None) -> DirectPlaywrightCrawler:
+    """Construct the reusable direct-Playwright renderer used by scrape."""
+    return DirectPlaywrightCrawler(config)
 
 
 class BrowserCrawlerSession:
-    """Lazily reuse one Crawl4AI browser across server requests.
-
-    Direct Python calls still own a short-lived crawler. MCP and FastAPI create
-    one of these inside their lifespan, so Chromium stays warm between nearby
-    requests and is closed after the configured idle period or server shutdown.
-    """
+    """Lazily reuse one direct Playwright browser across server requests."""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._crawler: Any | None = None
+        self._crawler: DirectPlaywrightCrawler | None = None
         self._active_leases = 0
         self._idle_task: asyncio.Task[None] | None = None
         self._idle_seconds = 300.0
@@ -236,7 +177,7 @@ class BrowserCrawlerSession:
         if task is not None and task is not asyncio.current_task():
             task.cancel()
 
-    async def _close_crawler(self, crawler: Any | None) -> None:
+    async def _close_crawler(self, crawler: DirectPlaywrightCrawler | None) -> None:
         if crawler is None:
             return
         with suppress(Exception):
@@ -256,7 +197,6 @@ class BrowserCrawlerSession:
 
     @asynccontextmanager
     async def lease(self, config: Mapping[str, Any]):
-        """Yield the shared started crawler and defer idle shutdown while in use."""
         async with self._lock:
             self._cancel_idle_task()
             self._idle_seconds = float(
@@ -281,7 +221,6 @@ class BrowserCrawlerSession:
                     self._idle_task = asyncio.create_task(self._close_after_idle())
 
     async def close(self) -> None:
-        """Close the shared crawler immediately during graceful shutdown."""
         task = self._idle_task
         self._cancel_idle_task()
         if task is not None and task is not asyncio.current_task():
@@ -320,8 +259,7 @@ def _extract_pdf_text(data: bytes) -> str:
         reader = PdfReader(tmp)
         pages: list[str] = []
         for idx, page in enumerate(reader.pages, start=1):
-            text = page.extract_text() or ""
-            text = text.strip()
+            text = (page.extract_text() or "").strip()
             if text:
                 pages.append(f"## Page {idx}\n\n{text}")
         return "\n\n".join(pages).strip()
@@ -373,29 +311,65 @@ def rank_chunks_bm25(
 
     corpus = [_tokenize_for_bm25(chunk["text"]) for chunk in chunks]
     bm25 = BM25Okapi(corpus)
-
     query_tokens = _tokenize_for_bm25(query)
     scores = bm25.get_scores(query_tokens)
+    ranked = sorted(zip(chunks, scores), key=lambda item: item[1], reverse=True)
 
-    ranked = sorted(
-        zip(chunks, scores),
-        key=lambda item: item[1],
-        reverse=True,
+    return [
+        {
+            "chunk_id": chunk["chunk_id"],
+            "heading": chunk["heading"],
+            "score": float(score),
+            "tokens": chunk["tokens"],
+            "text": chunk["text"],
+        }
+        for chunk, score in ranked[:top_k]
+    ]
+
+
+def _result_field(result: Any, key: str, default: Any = "") -> Any:
+    if isinstance(result, Mapping):
+        return result.get(key, default)
+    return getattr(result, key, default)
+
+
+async def fetch_html_for_query(
+    url: str,
+    user_query: str | None,
+    *,
+    crawler: Any | None = None,
+) -> dict[str, Any]:
+    """Render with Playwright and return accessibility text plus full HTML."""
+    del user_query
+    ensure_utf8_stdio()
+
+    with span_scope(
+        "tinysearch.browser",
+        attributes={"tinysearch.browser.used": True},
+        operation="browser",
+    ) as browser_telemetry:
+        if crawler is not None:
+            result = await crawler.arun(url=url, config=None)
+        else:
+            async with create_browser_crawler() as owned_crawler:
+                result = await owned_crawler.arun(url=url, config=None)
+        browser_telemetry.complete()
+
+    metadata_obj = _result_field(result, "metadata", {})
+    metadata = dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
+    final_url = (
+        _result_field(result, "redirected_url", None)
+        or _result_field(result, "url", None)
+        or url
     )
 
-    results = []
-    for chunk, score in ranked[:top_k]:
-        results.append(
-            {
-                "chunk_id": chunk["chunk_id"],
-                "heading": chunk["heading"],
-                "score": float(score),
-                "tokens": chunk["tokens"],
-                "text": chunk["text"],
-            }
-        )
-
-    return results
+    return {
+        "final_url": str(final_url),
+        "html": str(_result_field(result, "html", "") or ""),
+        "markdown_raw": str(_result_field(result, "markdown_raw", "") or ""),
+        "markdown_fit": "",
+        "metadata": metadata,
+    }
 
 
 async def crawl(
@@ -404,140 +378,26 @@ async def crawl(
     encoding_name: str = "o200k_base",
     *,
     user_query: str | None = None,
-    fit_markdown_mode: str = "off",
-    fit_min_chars: int = 200,
-    bm25_threshold: float = 1.5,
-    bm25_language: str = "english",
-    pruning_threshold: float = 0.48,
     crawler: Any | None = None,
 ) -> dict:
-    """
-    Crawl a URL (no internal search).
-
-    Returns url, html, markdown_raw (unfiltered), markdown (chosen for chunking),
-    markdown_fit (filtered markdown when a content filter ran, else empty),
-    markdown_source ('fit' or 'raw'), tokens_raw.
-
-    Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
-    to reuse one browser across many calls instead of launching a fresh one here.
-    """
-    ensure_utf8_stdio()
-
-    AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
-
-    run_config = _crawler_config_for_fit_markdown(
-        fit_markdown_mode=fit_markdown_mode,
-        user_query=user_query,
-        bm25_threshold=bm25_threshold,
-        bm25_language=bm25_language,
-        pruning_threshold=pruning_threshold,
+    page = await fetch_html_for_query(
+        url,
+        user_query,
+        crawler=crawler,
     )
-
-    with span_scope(
-        "tinysearch.browser",
-        attributes={"tinysearch.browser.used": True},
-        operation="browser",
-    ) as browser_telemetry:
-        if crawler is not None:
-            result = await crawler.arun(url=url, config=run_config)
-        else:
-            async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
-                result = await owned_crawler.arun(url=url, config=run_config)
-        browser_telemetry.complete()
-
-    html = get_html(result)
-    markdown_raw = get_markdown_raw(result)
-    markdown_fit = (get_markdown_fit(result) or "") if run_config is not None else ""
-
-    markdown_body, markdown_source = _pick_markdown_for_chunking(
-        markdown_raw,
-        markdown_fit,
-        fit_min_chars,
-    )
-
     markdown_raw = _truncate_to_max_tokens(
-        markdown_raw, max_return_tokens, encoding_name
+        page["markdown_raw"], max_return_tokens, encoding_name
     )
-    markdown_body = _truncate_to_max_tokens(
-        markdown_body, max_return_tokens, encoding_name
-    )
-    markdown_fit_out = _truncate_to_max_tokens(
-        markdown_fit.strip(), max_return_tokens, encoding_name
-    )
-
+    markdown_body, markdown_source = markdown_raw.strip(), "raw"
     return {
-        "url": url,
+        "url": page["final_url"],
         "max_return_tokens": max_return_tokens,
-        "html": html,
+        "html": page["html"],
         "markdown_raw": markdown_raw,
         "markdown": markdown_body,
-        "markdown_fit": markdown_fit_out if run_config is not None else "",
+        "markdown_fit": "",
         "markdown_source": markdown_source,
         "tokens_raw": token_count(markdown_raw, encoding_name),
-    }
-
-
-async def fetch_html_for_query(
-    url: str,
-    user_query: str | None,
-    *,
-    bm25_threshold: float = 1.5,
-    bm25_language: str = "english",
-    fit_markdown_mode: str = "bm25",
-    pruning_threshold: float = 0.48,
-    crawler: Any | None = None,
-) -> dict[str, Any]:
-    """Fetch a URL, applying a BM25 content filter only for a supplied query.
-
-    Returns ``final_url``, ``html``, ``markdown_raw``, ``markdown_fit`` and the
-    crawler's ``metadata`` dict. The ``final_url`` reflects the URL after any
-    redirects Crawl4AI followed.
-
-    Pass `crawler` (an already-started AsyncWebCrawler, see create_browser_crawler())
-    to reuse one browser across many calls instead of launching a fresh one here.
-    """
-    ensure_utf8_stdio()
-
-    AsyncWebCrawler, BrowserConfig, _, _, _, _ = _crawl4ai_stack()
-
-    config = _crawler_config_for_fit_markdown(
-        fit_markdown_mode=fit_markdown_mode,
-        user_query=user_query,
-        bm25_threshold=bm25_threshold,
-        bm25_language=bm25_language,
-        pruning_threshold=pruning_threshold,
-    )
-
-    with span_scope(
-        "tinysearch.browser",
-        attributes={"tinysearch.browser.used": True},
-        operation="browser",
-    ) as browser_telemetry:
-        if crawler is not None:
-            result = await crawler.arun(url=url, config=config)
-        else:
-            async with AsyncWebCrawler(config=_lightweight_browser_config(BrowserConfig)) as owned_crawler:
-                result = await owned_crawler.arun(url=url, config=config)
-        browser_telemetry.complete()
-
-    final_url = (
-        getattr(result, "redirected_url", None)
-        or getattr(result, "url", None)
-        or url
-    )
-    metadata_obj = getattr(result, "metadata", None)
-    metadata = dict(metadata_obj) if isinstance(metadata_obj, dict) else {}
-
-    return {
-        "final_url": str(final_url),
-        "html": get_html(result),
-        "markdown_raw": get_markdown_raw(result),
-        "markdown_fit": (
-            (get_markdown_fit(result) or "")
-            if fit_markdown_mode.strip().lower() not in ("", "off", "none", "raw")
-            else ""
-        ),
-        "metadata": metadata,
     }
 
 
@@ -549,68 +409,28 @@ async def crawl_search(
     overlap_tokens: int = 80,
     max_return_tokens: int | None = None,
     encoding_name: str = "o200k_base",
-    crawl4ai_bm25_threshold: float = 1.5,
-    crawl4ai_language: str = "english",
 ) -> dict:
-    """
-    Crawl a URL and run internal "search" over the page.
-
-    - Uses Crawl4AI's BM25ContentFilter to produce `markdown_fit`
-    - Chunks markdown (fit-first) and ranks chunks with local BM25
-
-    Returns: url, query, html, markdown_raw, markdown_fit, tokens_*, chunks, ranked_chunks
-    """
+    """Legacy helper: fetch once, then run TinySearch local BM25 over chunks."""
     ensure_utf8_stdio()
 
     if is_document_url(url):
         markdown_raw, document_type = await asyncio.to_thread(extract_document_text, url)
-        chunks = chunk_text(
-            text=markdown_raw,
-            max_chunk_tokens=max_chunk_tokens,
-            overlap_tokens=overlap_tokens,
-            encoding_name=encoding_name,
+        html = ""
+    else:
+        page = await fetch_html_for_query(
+            url=url,
+            user_query=user_query,
         )
-        ranked_chunks = rank_chunks_bm25(query=user_query, chunks=chunks, top_k=top_k)
-
-        if max_return_tokens is not None:
-            for chunk in ranked_chunks:
-                tokens = encode_tokens(chunk["text"], encoding_name)
-                if len(tokens) > max_return_tokens:
-                    chunk["text"] = decode_tokens(tokens[:max_return_tokens], encoding_name)
-                    chunk["tokens"] = max_return_tokens
-
-        return {
-            "url": url,
-            "query": user_query,
-            "html": "",
-            "markdown_raw": markdown_raw,
-            "markdown_fit": markdown_raw,
-            "tokens_raw": token_count(markdown_raw, encoding_name),
-            "tokens_fit": token_count(markdown_raw, encoding_name),
-            "chunks_total": len(chunks),
-            "chunks": chunks,
-            "ranked_chunks": ranked_chunks,
-            "document_type": document_type,
-        }
-
-    page = await fetch_html_for_query(
-        url=url,
-        user_query=user_query,
-        bm25_threshold=crawl4ai_bm25_threshold,
-        bm25_language=crawl4ai_language,
-    )
-    html = page["html"]
-    markdown_raw = page["markdown_raw"]
-    markdown_fit = page["markdown_fit"]
-    markdown_for_chunking = markdown_fit or markdown_raw
+        markdown_raw = page["markdown_raw"]
+        html = page["html"]
+        document_type = None
 
     chunks = chunk_text(
-        text=markdown_for_chunking,
+        text=markdown_raw,
         max_chunk_tokens=max_chunk_tokens,
         overlap_tokens=overlap_tokens,
         encoding_name=encoding_name,
     )
-
     ranked_chunks = rank_chunks_bm25(query=user_query, chunks=chunks, top_k=top_k)
 
     if max_return_tokens is not None:
@@ -620,38 +440,18 @@ async def crawl_search(
                 chunk["text"] = decode_tokens(tokens[:max_return_tokens], encoding_name)
                 chunk["tokens"] = max_return_tokens
 
-    return {
+    result = {
         "url": url,
         "query": user_query,
         "html": html,
         "markdown_raw": markdown_raw,
-        "markdown_fit": markdown_fit,
+        "markdown_fit": "",
         "tokens_raw": token_count(markdown_raw, encoding_name),
-        "tokens_fit": token_count(markdown_fit, encoding_name) if markdown_fit else 0,
+        "tokens_fit": 0,
         "chunks_total": len(chunks),
         "chunks": chunks,
         "ranked_chunks": ranked_chunks,
     }
-
-
-if __name__ == "__main__":
-    ensure_utf8_stdio()
-
-    crawl_result = asyncio.run(
-        crawl_search(
-            url="https://example.com",
-            user_query="What is this page about?",
-            top_k=5,
-            max_chunk_tokens=500,
-            overlap_tokens=80,
-        )
-    )
-
-    for chunk in crawl_result["ranked_chunks"]:
-        print("\n" + "=" * 100)
-        print(f"Chunk ID: {chunk['chunk_id']}")
-        print(f"Heading: {chunk['heading']}")
-        print(f"Score: {chunk['score']}")
-        print(f"Tokens: {chunk['tokens']}")
-        print("-" * 100)
-        print(chunk["text"])
+    if document_type is not None:
+        result["document_type"] = document_type
+    return result

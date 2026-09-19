@@ -36,11 +36,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "pipeline_timeout_seconds": 120.0,
     "embedding_timeout_seconds": 60.0,
     "embedding_timeout_retries": 2,
-    "crawl_fit_markdown_mode": "bm25",
-    "crawl_fit_min_chars": 200,
-    "crawl_bm25_threshold": 1.5,
-    "crawl_bm25_language": "english",
-    "crawl_pruning_threshold": 0.48,
     "crawl_max_chunk_tokens": 300,
     "crawl_overlap_tokens": 80,
     "crawl_max_page_tokens": 0,
@@ -83,7 +78,6 @@ _INT_FIELDS = {
     "search_top_k",
     "max_concurrent_embedding_calls",
     "embedding_timeout_retries",
-    "crawl_fit_min_chars",
     "crawl_max_chunk_tokens",
     "crawl_overlap_tokens",
     "crawl_max_page_tokens",
@@ -94,8 +88,6 @@ _INT_FIELDS = {
 _FLOAT_FIELDS = {
     "chunk_rrf_cutoff",
     "chunk_dense_weight",
-    "crawl_bm25_threshold",
-    "crawl_pruning_threshold",
     "embedding_timeout_seconds",
     "searxng_timeout_seconds",
     "ddgs_timeout_seconds",
@@ -114,7 +106,16 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
             if not str(key).startswith("_comment")
         }
     )
-    for legacy in ("embedding_gguf_file", "mcp_transport", "browser_output_dir"):
+    for legacy in (
+        "embedding_gguf_file",
+        "mcp_transport",
+        "browser_output_dir",
+        "crawl_fit_markdown_mode",
+        "crawl_fit_min_chars",
+        "crawl_bm25_threshold",
+        "crawl_bm25_language",
+        "crawl_pruning_threshold",
+    ):
         config.pop(legacy, None)
     for key in _INT_FIELDS:
         config[key] = int(config[key])
@@ -148,8 +149,6 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "embedding_openai_env_file",
         "dense_query_prefix",
         "dense_document_prefix",
-        "crawl_fit_markdown_mode",
-        "crawl_bm25_language",
         "ddgs_backend",
         "browser_backend",
         "browser_cdp_url",
