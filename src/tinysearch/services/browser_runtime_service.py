@@ -2,10 +2,49 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
+
+# Connection.cleanup() (playwright._impl._connection) cancels its internal
+# `_init_task` without awaiting or clearing the reference, so the Task (and
+# the TargetClosedError future it captured) survive until a later garbage
+# collection pass. Python's C-accelerated Task/Future __del__ writes that
+# warning straight to sys.stderr rather than through asyncio's exception
+# handler (confirmed: neither a loop exception handler nor a patched
+# `call_exception_handler` ever sees it), so it can't be filtered any other
+# way. It's cosmetic -- results are correct whenever it fires -- and
+# internal to the `playwright` package; match on its exact, stable markers
+# so nothing else written to stderr is ever affected.
+_BENIGN_STDERR_MARKERS = (
+    ("Task was destroyed but it is pending!", "Connection.run"),
+    ("Future exception was never retrieved", "TargetClosedError"),
+)
+_shutdown_noise_filter_installed = False
+
+
+class _StderrNoiseFilter:
+    def __init__(self, target: Any) -> None:
+        self._target = target
+
+    def write(self, data: str) -> int:
+        for markers in _BENIGN_STDERR_MARKERS:
+            if all(marker in data for marker in markers):
+                return len(data)
+        return self._target.write(data)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._target, name)
+
+
+def _ensure_shutdown_noise_filtered() -> None:
+    global _shutdown_noise_filter_installed
+    if _shutdown_noise_filter_installed:
+        return
+    sys.stderr = _StderrNoiseFilter(sys.stderr)
+    _shutdown_noise_filter_installed = True
 
 
 class PlaywrightRuntime:
@@ -29,6 +68,7 @@ class PlaywrightRuntime:
         if self.started:
             return
 
+        _ensure_shutdown_noise_filtered()
         from playwright.async_api import async_playwright
 
         self._playwright = await async_playwright().start()
