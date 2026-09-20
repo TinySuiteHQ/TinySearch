@@ -55,6 +55,7 @@ class PlaywrightRuntime:
         self._playwright: Any = None
         self._browser: Any = None
         self._owns_browser = True
+        self._next_proxy_index = 0
 
     @property
     def started(self) -> bool:
@@ -63,6 +64,31 @@ class PlaywrightRuntime:
     def storage_state_path(self) -> Path | None:
         raw = str(self._config.get("browser_storage_state_path") or "").strip()
         return Path(raw) if raw else None
+
+    def _next_proxy(self) -> dict[str, str] | None:
+        """Pick the next configured proxy, round-robin, for rotation across contexts."""
+        servers = [
+            entry.strip()
+            for entry in str(self._config.get("browser_proxy_server") or "").split(",")
+            if entry.strip()
+        ]
+        if not servers:
+            return None
+
+        server = servers[self._next_proxy_index % len(servers)]
+        self._next_proxy_index += 1
+
+        proxy: dict[str, str] = {"server": server}
+        username = str(self._config.get("browser_proxy_username") or "").strip()
+        password = str(self._config.get("browser_proxy_password") or "").strip()
+        bypass = str(self._config.get("browser_proxy_bypass") or "").strip()
+        if username:
+            proxy["username"] = username
+        if password:
+            proxy["password"] = password
+        if bypass:
+            proxy["bypass"] = bypass
+        return proxy
 
     async def start(self) -> None:
         if self.started:
@@ -89,6 +115,9 @@ class PlaywrightRuntime:
         state = self.storage_state_path()
         if state is not None and state.is_file():
             options["storage_state"] = str(state)
+        proxy = self._next_proxy()
+        if proxy is not None:
+            options["proxy"] = proxy
 
         context = await self._browser.new_context(**options)
         if apply_action_timeout:

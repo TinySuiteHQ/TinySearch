@@ -90,6 +90,56 @@ class PlaywrightRuntimeTests(unittest.IsolatedAsyncioTestCase):
         )
         context.set_default_timeout.assert_called_once_with(2500.0)
 
+    async def test_new_context_applies_configured_proxy(self) -> None:
+        context = MagicMock()
+        browser = MagicMock()
+        browser.new_context = AsyncMock(return_value=context)
+
+        runtime = PlaywrightRuntime(
+            {
+                "browser_proxy_server": "http://proxy.example.com:8000",
+                "browser_proxy_username": "user",
+                "browser_proxy_password": "pass",
+                "browser_proxy_bypass": "internal.example.com",
+            }
+        )
+        runtime._browser = browser
+
+        await runtime.new_context()
+
+        browser.new_context.assert_awaited_once_with(
+            locale="en-US",
+            proxy={
+                "server": "http://proxy.example.com:8000",
+                "username": "user",
+                "password": "pass",
+                "bypass": "internal.example.com",
+            },
+        )
+
+    async def test_new_context_round_robins_across_multiple_proxies(self) -> None:
+        context = MagicMock()
+        browser = MagicMock()
+        browser.new_context = AsyncMock(return_value=context)
+
+        runtime = PlaywrightRuntime(
+            {"browser_proxy_server": "http://proxy-a:8000, http://proxy-b:8000"}
+        )
+        runtime._browser = browser
+
+        await runtime.new_context()
+        await runtime.new_context()
+        await runtime.new_context()
+
+        servers = [
+            call.kwargs["proxy"]["server"]
+            for call in browser.new_context.await_args_list
+        ]
+        self.assertEqual(
+            servers,
+            ["http://proxy-a:8000", "http://proxy-b:8000", "http://proxy-a:8000"],
+        )
+
     async def test_persist_storage_state_creates_parent_and_writes_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state = Path(tmp) / "nested" / "state.json"

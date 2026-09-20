@@ -65,6 +65,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "browser_response_char_budget": 20000,
     "browser_idle_shutdown_seconds": 300.0,
     "browser_action_timeout_seconds": 10.0,
+    "browser_proxy_server": "",
+    "browser_proxy_username": "",
+    "browser_proxy_password": "",
+    "browser_proxy_bypass": "",
 }
 
 SUPPORTED_BROWSER_BACKENDS = ("off", "playwright")
@@ -153,6 +157,10 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "browser_backend",
         "browser_cdp_url",
         "browser_storage_state_path",
+        "browser_proxy_server",
+        "browser_proxy_username",
+        "browser_proxy_password",
+        "browser_proxy_bypass",
     ):
         if config.get(key) is not None:
             config[key] = str(config[key])
@@ -177,6 +185,24 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
                 "tinysearch config browser_cdp_url must include a hostname"
             )
     config["browser_cdp_url"] = browser_cdp_url
+
+    proxy_servers = [
+        entry.strip()
+        for entry in config["browser_proxy_server"].split(",")
+        if entry.strip()
+    ]
+    for proxy_server in proxy_servers:
+        parsed_proxy = urlsplit(proxy_server)
+        if parsed_proxy.scheme.lower() not in {"http", "https", "socks5"}:
+            raise ValueError(
+                "tinysearch config browser_proxy_server entries must use "
+                "http, https, or socks5"
+            )
+        if not parsed_proxy.hostname:
+            raise ValueError(
+                "tinysearch config browser_proxy_server entries must include a hostname"
+            )
+    config["browser_proxy_server"] = ", ".join(proxy_servers)
 
     embedding_backend = normalize_embedding_backend(
         str(config.get("embedding_backend") or DEFAULT_EMBEDDING_BACKEND)

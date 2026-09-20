@@ -56,6 +56,10 @@ def load_tinysearch_config(path: str | Path | None = None) -> dict[str, Any]:
         ("TINYSEARCH_BROWSER_CDP_URL", "browser_cdp_url"),
         ("TINYSEARCH_BROWSER_BACKEND", "browser_backend"),
         ("TINYSEARCH_BROWSER_STORAGE_STATE_PATH", "browser_storage_state_path"),
+        ("TINYSEARCH_BROWSER_PROXY_SERVER", "browser_proxy_server"),
+        ("TINYSEARCH_BROWSER_PROXY_USERNAME", "browser_proxy_username"),
+        ("TINYSEARCH_BROWSER_PROXY_PASSWORD", "browser_proxy_password"),
+        ("TINYSEARCH_BROWSER_PROXY_BYPASS", "browser_proxy_bypass"),
     ):
         value = os.environ.get(env_name, "").strip()
         if value:

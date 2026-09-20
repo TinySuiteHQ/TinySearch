@@ -26,6 +26,10 @@ _OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({
     "browser_cdp_url",
     "browser_backend",
     "browser_storage_state_path",
+    "browser_proxy_server",
+    "browser_proxy_username",
+    "browser_proxy_password",
+    "browser_proxy_bypass",
 })
 
 

@@ -413,6 +413,35 @@ the file selected by `TINYSEARCH_CONFIG_PATH`, then restart TinySearch. HTTP
 clients can continue updating other settings by omitting these fields from
 their partial update.
 
+### Proxies
+
+To route crawling through a proxy, set `browser_proxy_server`:
+
+```json
+{
+  "browser_proxy_server": "http://gateway.proxyprovider.com:8000",
+  "browser_proxy_username": "your-username",
+  "browser_proxy_password": "your-password"
+}
+```
+
+`http`, `https`, and `socks5` proxy URLs are supported, matching what
+Playwright accepts. If your provider hands out several fixed gateway
+endpoints, comma-separate them and TinySearch round-robins one per new
+browser context:
+
+```json
+{
+  "browser_proxy_server": "http://gw1.proxyprovider.com:8000, http://gw2.proxyprovider.com:8000"
+}
+```
+
+Use `browser_proxy_bypass` for a comma-separated list of hosts that should
+skip the proxy. These four fields are operator-managed like the CDP settings
+above -- settable via `TINYSEARCH_BROWSER_PROXY_SERVER`,
+`TINYSEARCH_BROWSER_PROXY_USERNAME`, `TINYSEARCH_BROWSER_PROXY_PASSWORD`, and
+`TINYSEARCH_BROWSER_PROXY_BYPASS`, or the config file, but never over HTTP.
+
 ## Why TinySearch
 
 - **No vendor in the loop.** No TinySearch account, no required API key, no
