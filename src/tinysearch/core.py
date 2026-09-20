@@ -19,7 +19,11 @@ from tinysearch.config import ConfigInput, resolve_config
 from tinysearch.pipelines.scrape import run_scrape_pipeline
 from tinysearch.results import public_chunk, public_link, result_envelope
 from tinysearch.services.current_datetime_service import current_datetime_payload
-from tinysearch.services.embedding_service import normalize_embedding_backend
+from tinysearch.services.embedding_service import (
+    create_batching_embedder,
+    create_embedder,
+    normalize_embedding_backend,
+)
 from tinysearch.services.scrape_service import DEFAULT_SCRAPE_MAX_TOKENS
 from tinysearch.services.site_crawl_service import (
     BrowserCrawlerSession,
@@ -187,6 +191,7 @@ async def _scrape_url_with_config(
     max_tokens: int,
     config: dict[str, Any],
     crawler: Any | None,
+    embedder: Any | None = None,
 ) -> dict[str, Any]:
     with span_scope(
         "tinysearch.scrape.item",
@@ -201,6 +206,7 @@ async def _scrape_url_with_config(
             include_metadata=True,
             config=config,
             crawler=crawler,
+            embedder=embedder,
         )
         source = {
             "id": "1",
@@ -275,8 +281,23 @@ async def scrape_urls(
             normalized.append((url, query))
 
         resolved = _resolve_config(config)
-        if any((query or "").strip() not in {"", "*"} for _, query in normalized):
+        needs_embeddings = any(
+            (query or "").strip() not in {"", "*"} for _, query in normalized
+        )
+        shared_embedder = None
+        if needs_embeddings:
             await _ensure_local_bundle_for_config(resolved)
+            shared_embedder = create_batching_embedder(
+                create_embedder(
+                    backend=resolved["embedding_backend"],
+                    embedding_model=resolved["embedding_model"],
+                    openai_env_file=(
+                        resolved["embedding_openai_env_file"]
+                        if resolved["embedding_backend"] == "openai_compatible"
+                        else None
+                    ),
+                )
+            )
         await _ensure_browser_bundle(resolved)
 
         needs_browser = any(not is_document_url(url) for url, _ in normalized)
@@ -309,6 +330,7 @@ async def scrape_urls(
                         max_tokens=max_tokens,
                         config=resolved,
                         crawler=shared_crawler,
+                        embedder=shared_embedder,
                     )
                     for url, query in unique_items
                 ),

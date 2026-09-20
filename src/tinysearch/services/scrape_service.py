@@ -180,8 +180,11 @@ def select_chunks_under_budget(
     for chunk in ranked:
         chunk_tokens = int(chunk.get("tokens") or 0)
         if total + chunk_tokens > max_tokens:
+            # Skip past chunks that don't fit rather than stopping here: a
+            # single oversized chunk mid-ranking should not discard every
+            # cheaper, lower-ranked chunk behind it that would still fit.
             truncated = True
-            break
+            continue
         selected.append(chunk)
         total += chunk_tokens
     if not selected and ranked:
@@ -204,8 +207,6 @@ async def fetch_html_with_timeout(
     *,
     url: str,
     query: str | None,
-    bm25_threshold: float,
-    bm25_language: str,
     timeout_seconds: float,
     crawl_fn: HtmlCrawlFn,
     crawler: Any | None = None,
@@ -215,8 +216,6 @@ async def fetch_html_with_timeout(
             kwargs: dict[str, Any] = {
                 "url": url,
                 "user_query": query,
-                "bm25_threshold": bm25_threshold,
-                "bm25_language": bm25_language,
             }
             if crawler is not None:
                 kwargs["crawler"] = crawler

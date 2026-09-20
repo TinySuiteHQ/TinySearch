@@ -1,9 +1,9 @@
 """Browser automation implemented directly on Playwright's Python API.
 
-TinySearch already depends on Playwright (through Crawl4AI) and already
-installs its Chromium, so browser automation needs no second runtime, no
-second browser, and no child process: the tools below are thin adapters over
-the same driver the scrape pipeline uses.
+TinySearch uses Playwright directly for both scraping and browser automation,
+so the tools below are thin adapters over the same browser API and installed
+Chromium runtime as the scrape pipeline. Interactive sessions remain isolated
+from concurrent scrape contexts.
 
 What makes this workable is Playwright's own accessibility snapshot. It
 labels every node with a stable `[ref=eNN]`, and the `aria-ref=` selector
@@ -35,9 +35,9 @@ import json
 import re
 import time
 from collections.abc import Mapping
-from pathlib import Path
 from typing import Any
 
+from tinysearch.services.browser_runtime_service import PlaywrightRuntime
 from tinysearch.telemetry import span_scope
 
 MINIMUM_PLAYWRIGHT_VERSION = "1.59"
@@ -270,11 +270,9 @@ class BrowserSession:
 
     def __init__(self, config: Mapping[str, Any]) -> None:
         self._config = dict(config)
-        self._playwright: Any = None
-        self._browser: Any = None
+        self._runtime = PlaywrightRuntime(config)
         self._context: Any = None
         self._page: Any = None
-        self._owns_browser = True
         self._lock = asyncio.Lock()
         self._last_used = time.monotonic()
         self._idle_task: asyncio.Task[None] | None = None
@@ -283,50 +281,17 @@ class BrowserSession:
     def started(self) -> bool:
         return self._context is not None
 
-    def _storage_state_path(self) -> Path | None:
-        raw = str(self._config.get("browser_storage_state_path") or "").strip()
-        return Path(raw) if raw else None
-
     async def start(self) -> None:
         self._cancel_idle_shutdown()
         async with self._lock:
             if self.started:
                 return
             ensure_supported()
-            from playwright.async_api import async_playwright
-
-            self._playwright = await async_playwright().start()
-            cdp_url = str(self._config.get("browser_cdp_url") or "").strip()
-            if cdp_url:
-                # An operator-supplied browser owns its own profile and
-                # fingerprint; connect to it instead of launching one.
-                self._browser = await self._playwright.chromium.connect_over_cdp(cdp_url)
-                self._owns_browser = False
-            else:
-                self._browser = await self._playwright.chromium.launch(headless=True)
-                self._owns_browser = True
-
-            state = self._storage_state_path()
-            context_options: dict[str, Any] = {"locale": "en-US"}
-            if state is not None and state.is_file():
-                context_options["storage_state"] = str(state)
-            self._context = await self._browser.new_context(**context_options)
-            self._context.set_default_timeout(
-                float(self._config.get("browser_action_timeout_seconds") or 10.0) * 1000
+            self._context = await self._runtime.new_context(
+                apply_action_timeout=True
             )
             self._page = await self._context.new_page()
             self._last_used = time.monotonic()
-
-    async def _save_storage_state(self) -> None:
-        """Persist cookies so a consent banner is a one-time cost."""
-        state = self._storage_state_path()
-        if state is None or self._context is None:
-            return
-        try:
-            state.parent.mkdir(parents=True, exist_ok=True)
-            await self._context.storage_state(path=str(state))
-        except Exception:
-            pass
 
     async def close(self) -> None:
         idle_task = self._idle_task
@@ -334,19 +299,14 @@ class BrowserSession:
         if idle_task is not None and idle_task is not asyncio.current_task():
             idle_task.cancel()
         async with self._lock:
-            await self._save_storage_state()
-            for closer in (self._context, self._browser if self._owns_browser else None):
-                if closer is not None:
-                    try:
-                        await closer.close()
-                    except Exception:
-                        pass
-            if self._playwright is not None:
+            await self._runtime.persist_storage_state(self._context)
+            if self._context is not None:
                 try:
-                    await self._playwright.stop()
+                    await self._context.close()
                 except Exception:
                     pass
-            self._playwright = self._browser = self._context = self._page = None
+            await self._runtime.close()
+            self._context = self._page = None
 
     def _cancel_idle_shutdown(self) -> None:
         task, self._idle_task = self._idle_task, None

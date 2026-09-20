@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from tinysearch.services.token_counter_service import resolve_tokenizer
 
 
@@ -35,14 +37,17 @@ def chunk_text(
     """
     Structure-aware text chunking.
 
-    Markdown headings are preserved as chunk metadata when present, but callers
-    can pass any plain text.
+    Markdown headings and Playwright ARIA heading records are preserved as
+    chunk metadata when present, but callers can pass any plain text.
+    Sections exceeding max_chunk_tokens are windowed with overlap_tokens of
+    overlap, same as any other oversized text.
     """
     encoding = resolve_tokenizer(encoding_name, model=model)
 
-    import re
-
-    blocks = re.split(r"(?=\n#{1,6}\s)|\n{2,}", text.strip())
+    blocks = re.split(
+        r"(?m)(?=^#{1,6}\s)|(?=^\s*-\s+heading\b)|\n{2,}",
+        text.strip(),
+    )
 
     chunks: list[dict] = []
     current_blocks: list[str] = []
@@ -81,7 +86,12 @@ def chunk_text(
                         "chunk_id": len(chunks),
                         "heading": current_heading,
                         "text": piece,
-                        "tokens": len(encoding.encode(piece)),
+                        # Use the true slice length, not a re-encode of the
+                        # stripped text: stripping a leading/trailing token's
+                        # partial whitespace can shift the re-encoded count
+                        # past max_chunk_tokens even though the slice itself
+                        # never exceeded the budget.
+                        "tokens": end - start,
                     }
                 )
 
@@ -90,12 +100,13 @@ def chunk_text(
         if not block:
             continue
 
-        heading = _parse_markdown_heading(block)
+        heading = _parse_heading(block)
         if heading is not None:
+            if current_blocks:
+                flush()
             current_heading = heading
 
         block_tokens = len(encoding.encode(block))
-
         if block_tokens > max_chunk_tokens:
             flush()
             split_large_block(block)
@@ -116,6 +127,10 @@ def chunk_text(
 chunk_markdown = chunk_text
 
 
+def _parse_heading(block: str) -> str | None:
+    return _parse_markdown_heading(block) or _parse_aria_heading(block)
+
+
 def _parse_markdown_heading(block: str) -> str | None:
     if not block or block[0] != "#":
         return None
@@ -127,4 +142,23 @@ def _parse_markdown_heading(block: str) -> str | None:
     if marker_count >= len(block) or not block[marker_count].isspace():
         return None
     heading = block[marker_count:].strip()
+    return heading or None
+
+
+_ARIA_HEADING_RE = re.compile(
+    r'^\s*-\s+heading\s+(?:"(?P<quoted>(?:\\.|[^"])*)"|(?P<plain>.*?))'
+    r'(?:\s+\[level=\d+\])?(?:\s+\[ref=[^\]]+\])?\s*$'
+)
+
+
+def _parse_aria_heading(block: str) -> str | None:
+    """Extract heading text from a Playwright AI-mode ARIA snapshot record."""
+    first_line = (block or "").splitlines()[0].strip()
+    match = _ARIA_HEADING_RE.match(first_line)
+    if match is None:
+        return None
+    heading = match.group("quoted") if match.group("quoted") is not None else match.group("plain")
+    if heading is None:
+        return None
+    heading = heading.replace(r'\"', '"').replace(r"\\", "\\").strip()
     return heading or None

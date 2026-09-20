@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from collections.abc import Mapping
 from functools import partial
 from typing import Any
@@ -38,7 +37,6 @@ from tinysearch.services.scrape_service import (
 )
 from tinysearch.services.token_counter_service import decode_tokens, encode_tokens
 from tinysearch.services.site_crawl_service import (
-    _pick_markdown_for_chunking,
     extract_document_text,
     fetch_html_for_query,
     is_document_url,
@@ -52,61 +50,33 @@ from tinysearch.services.url_safety_service import assert_url_is_fetchable
 from tinysearch.telemetry import span_scope
 
 
-# Bounds embedding cost on link-heavy pages; ranking only ever returns
-# `max_links` of these, but every candidate in the pool gets embedded.
-_MAX_LINK_CANDIDATES = 100
+# Bounds dense-embedding cost on long/content-dense pages; a page's ARIA
+# text can chunk into hundreds of windows (a long Wikipedia article runs to
+# ~500+), and rank_chunks_hybrid dense-embeds every chunk it's given. A
+# cheap BM25 pass over the full chunk set picks the pool worth the expensive
+# rerank, without ever dropping a chunk before it's been scored at all.
+_MAX_CONTENT_CHUNK_CANDIDATES = 100
 
 
-def _memoizing_embedder(embedder: EmbeddingFn) -> EmbeddingFn:
-    """Reuse identical embedding batches within one page ranking operation."""
-    cache: dict[tuple[str, ...], list[list[float]]] = {}
-
-    async def cached(inputs: list[str]) -> list[list[float]]:
-        key = tuple(inputs)
-        vectors = cache.get(key)
-        if vectors is None:
-            value = embedder(inputs)
-            if inspect.isawaitable(value):
-                value = await value
-            vectors = [list(vector) for vector in value]
-            cache[key] = vectors
-        return [list(vector) for vector in vectors]
-
-    return cached
-
-
-def _prefilter_links_by_bm25(
-    candidate_links: list[dict[str, str]],
+def _prefilter_chunks_by_bm25(
+    chunks: list[dict[str, Any]],
     query: str,
     limit: int,
-) -> list[dict[str, str]]:
-    """Pick the `limit` most lexically relevant links before the expensive rerank.
-
-    A link-dense page (a news homepage, say) can carry hundreds of anchors;
-    truncating to the first `limit` in DOM order would silently drop a
-    genuinely relevant link that happens to sit later on the page, before it
-    ever gets a chance to be scored. A cheap BM25 pass over the full
-    candidate set keeps embedding cost bounded without that blind spot.
-    """
-    if len(candidate_links) <= limit:
-        return candidate_links
+) -> list[dict[str, Any]]:
+    """Pick the `limit` most lexically relevant chunks before dense rerank."""
+    if len(chunks) <= limit:
+        return chunks
     query_tokens = tokenize_for_retrieval(query)
     if not query_tokens:
-        return candidate_links[:limit]
-    corpus = [
-        tokenize_for_retrieval(f"{link['text']} {link['context']}")
-        for link in candidate_links
-    ]
+        return chunks[:limit]
+    corpus = [tokenize_for_retrieval(str(chunk.get("text") or "")) for chunk in chunks]
     if not any(corpus):
-        # BM25Okapi divides by average document length; an all-empty corpus
-        # (e.g. image-only nav links with no text or context) makes that
-        # zero. Nothing to lexically rank in that case, so keep DOM order.
-        return candidate_links[:limit]
+        return chunks[:limit]
     scores = BM25Okapi(corpus).get_scores(query_tokens)
     ranked_indices = sorted(
-        range(len(candidate_links)), key=lambda idx: scores[idx], reverse=True
+        range(len(chunks)), key=lambda idx: scores[idx], reverse=True
     )
-    return [candidate_links[idx] for idx in ranked_indices[:limit]]
+    return [chunks[idx] for idx in ranked_indices[:limit]]
 
 
 async def _select_top_links(
@@ -114,57 +84,49 @@ async def _select_top_links(
     *,
     query: str,
     max_links: int,
-    embedder: EmbeddingFn | None,
-    resolved: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
-    """Rank candidate links against `query`, or fall back to page order.
-
-    Reuses the same hybrid BM25 + dense retrieval as content-chunk ranking
-    (see `hybrid_embed_search_service.rank_chunks_hybrid`), scoring each
-    link's text plus nearby page context. Falls back to unranked page-order
-    when there is no real query (raw page-order requests) to rank against.
-    """
+    """Rank related links with BM25 only; raw requests keep page order."""
     if not candidate_links or max_links <= 0:
         return []
-    if not query or embedder is None:
+    if not query:
         return [
             {"url": link["url"], "text": link["text"] or link["url"], "score": None}
             for link in candidate_links[:max_links]
         ]
-    pool = _prefilter_links_by_bm25(candidate_links, query, _MAX_LINK_CANDIDATES)
-    link_chunks = [
-        {
-            "url": link["url"],
-            "link_text": link["text"],
-            "text": f"{link['text']} {link['context']}".strip(),
-        }
-        for link in pool
+
+    query_tokens = tokenize_for_retrieval(query)
+    corpus = [
+        tokenize_for_retrieval(f"{link['text']} {link['context']}")
+        for link in candidate_links
     ]
-    ranked = await rank_chunks_hybrid(
-        query,
-        link_chunks,
-        embedder=embedder,
-        top_k=max_links,
-        rrf_similarity_cutoff=resolved["chunk_rrf_cutoff"],
-        dense_weight=resolved["chunk_dense_weight"],
-        dense_query_prefix=resolved["dense_query_prefix"],
-        dense_document_prefix=resolved["dense_document_prefix"],
-        dense_document_embed_batch_size=resolved["dense_document_embed_batch_size"],
-        semaphore=shared_embedding_semaphore(
-            resolved["max_concurrent_embedding_calls"]
-        ),
-        timeout_seconds=resolved["embedding_timeout_seconds"],
-        max_timeout_retries=resolved["embedding_timeout_retries"],
-    )
+    if not query_tokens or not any(corpus):
+        return [
+            {
+                "url": link["url"],
+                "text": link["text"] or link["url"],
+                "score": 0.0,
+            }
+            for link in candidate_links[:max_links]
+        ]
+
+    scores = BM25Okapi(corpus).get_scores(query_tokens)
+    max_score = float(max(scores)) if len(scores) else 0.0
+    ranked_indices = sorted(
+        range(len(candidate_links)),
+        key=lambda idx: float(scores[idx]),
+        reverse=True,
+    )[:max_links]
     return [
         {
-            "url": item["url"],
-            "text": item.get("link_text") or item["url"],
-            "score": float(item.get("rrf_similarity") or 0.0),
+            "url": candidate_links[idx]["url"],
+            "text": candidate_links[idx]["text"] or candidate_links[idx]["url"],
+            # Normalize to 0-1 so `score` keeps the same contract as the
+            # hybrid RRF score it replaced; raw BM25Okapi scores are
+            # unbounded.
+            "score": float(scores[idx]) / max_score if max_score > 0 else 0.0,
         }
-        for item in ranked
+        for idx in ranked_indices
     ]
-
 
 def _links_under_budget(
     links: list[dict[str, Any]], *, max_tokens: int, tokenizer_name: str
@@ -201,7 +163,7 @@ async def run_scrape_pipeline(
     Omitted, blank, and ``'*'`` queries select raw page-order extraction; any
     other non-empty query enables the existing focused chunk-ranking path.
 
-    Pass `crawler` (an already-started AsyncWebCrawler, see
+    Pass `crawler` (an already-started direct Playwright crawler, see
     site_crawl_service.create_browser_crawler()) to reuse one browser across
     several pipeline calls instead of launching a fresh one per call.
     """
@@ -255,13 +217,7 @@ async def run_scrape_pipeline(
             fetch_telemetry.complete()
     else:
         if crawl_fn is None:
-            crawl_fn = partial(
-                fetch_html_for_query,
-                fit_markdown_mode=(
-                    "off" if raw_page_order else resolved["crawl_fit_markdown_mode"]
-                ),
-                pruning_threshold=resolved["crawl_pruning_threshold"],
-            )
+            crawl_fn = fetch_html_for_query
         with span_scope(
             "tinysearch.fetch",
             attributes={"tinysearch.browser.used": True, "tinysearch.document.type": "html"},
@@ -270,8 +226,6 @@ async def run_scrape_pipeline(
             page = await fetch_html_with_timeout(
                 url=safe_url,
                 query=None if raw_page_order else cleaned_query,
-                bm25_threshold=resolved["crawl_bm25_threshold"],
-                bm25_language=resolved["crawl_bm25_language"],
                 timeout_seconds=fetch_timeout_seconds,
                 crawl_fn=crawl_fn,
                 crawler=crawler,
@@ -293,16 +247,7 @@ async def run_scrape_pipeline(
                 result_count=len(candidate_links),
                 attributes={"tinysearch.link.candidate.count": len(candidate_links)},
             )
-        markdown_raw = str(page.get("markdown_raw") or "")
-        markdown_fit = str(page.get("markdown_fit") or "")
-        if raw_page_order:
-            markdown = markdown_raw
-        else:
-            markdown, _markdown_source = _pick_markdown_for_chunking(
-                markdown_raw,
-                markdown_fit,
-                int(resolved["crawl_fit_min_chars"]),
-            )
+        markdown = str(page.get("markdown_raw") or "")
 
     if not markdown or not markdown.strip():
         raise EmptyContentError(f"no readable content extracted from {final_url}")
@@ -325,8 +270,6 @@ async def run_scrape_pipeline(
             candidate_links,
             query="",
             max_links=int(resolved["scrape_max_links"]),
-            embedder=None,
-            resolved=resolved,
         )
         links, link_tokens = _links_under_budget(
             links,
@@ -378,24 +321,24 @@ async def run_scrape_pipeline(
                 else None
             ),
         )
-    embedder = _memoizing_embedder(embedder)
     links = await _select_top_links(
         candidate_links,
         query=cleaned_query,
         max_links=int(resolved["scrape_max_links"]),
-        embedder=embedder,
-        resolved=resolved,
     )
     links, link_tokens = _links_under_budget(
         links,
         max_tokens=int(resolved["scrape_max_link_tokens"]),
         tokenizer_name=tokenizer_name,
     )
+    chunk_pool = _prefilter_chunks_by_bm25(
+        chunks, cleaned_query, _MAX_CONTENT_CHUNK_CANDIDATES
+    )
     ranked = await rank_chunks_hybrid(
         cleaned_query,
-        chunks,
+        chunk_pool,
         embedder=embedder,
-        top_k=len(chunks),
+        top_k=len(chunk_pool),
         rrf_similarity_cutoff=resolved["chunk_rrf_cutoff"],
         dense_weight=resolved["chunk_dense_weight"],
         dense_query_prefix=resolved["dense_query_prefix"],
@@ -403,8 +346,12 @@ async def run_scrape_pipeline(
         dense_document_embed_batch_size=resolved[
             "dense_document_embed_batch_size"
         ],
-        semaphore=shared_embedding_semaphore(
-            resolved["max_concurrent_embedding_calls"]
+        semaphore=(
+            None
+            if getattr(embedder, "manages_concurrency", False)
+            else shared_embedding_semaphore(
+                resolved["max_concurrent_embedding_calls"]
+            )
         ),
         timeout_seconds=resolved["embedding_timeout_seconds"],
         max_timeout_retries=resolved["embedding_timeout_retries"],
