@@ -180,8 +180,11 @@ def select_chunks_under_budget(
     for chunk in ranked:
         chunk_tokens = int(chunk.get("tokens") or 0)
         if total + chunk_tokens > max_tokens:
+            # Skip past chunks that don't fit rather than stopping here: a
+            # single oversized chunk mid-ranking should not discard every
+            # cheaper, lower-ranked chunk behind it that would still fit.
             truncated = True
-            break
+            continue
         selected.append(chunk)
         total += chunk_tokens
     if not selected and ranked:

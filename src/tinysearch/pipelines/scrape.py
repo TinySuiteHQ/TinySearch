@@ -50,6 +50,35 @@ from tinysearch.services.url_safety_service import assert_url_is_fetchable
 from tinysearch.telemetry import span_scope
 
 
+# Bounds dense-embedding cost on long/content-dense pages; a page's ARIA
+# text can chunk into hundreds of windows (a long Wikipedia article runs to
+# ~500+), and rank_chunks_hybrid dense-embeds every chunk it's given. A
+# cheap BM25 pass over the full chunk set picks the pool worth the expensive
+# rerank, without ever dropping a chunk before it's been scored at all.
+_MAX_CONTENT_CHUNK_CANDIDATES = 100
+
+
+def _prefilter_chunks_by_bm25(
+    chunks: list[dict[str, Any]],
+    query: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    """Pick the `limit` most lexically relevant chunks before dense rerank."""
+    if len(chunks) <= limit:
+        return chunks
+    query_tokens = tokenize_for_retrieval(query)
+    if not query_tokens:
+        return chunks[:limit]
+    corpus = [tokenize_for_retrieval(str(chunk.get("text") or "")) for chunk in chunks]
+    if not any(corpus):
+        return chunks[:limit]
+    scores = BM25Okapi(corpus).get_scores(query_tokens)
+    ranked_indices = sorted(
+        range(len(chunks)), key=lambda idx: scores[idx], reverse=True
+    )
+    return [chunks[idx] for idx in ranked_indices[:limit]]
+
+
 async def _select_top_links(
     candidate_links: list[dict[str, str]],
     *,
@@ -81,6 +110,7 @@ async def _select_top_links(
         ]
 
     scores = BM25Okapi(corpus).get_scores(query_tokens)
+    max_score = float(max(scores)) if len(scores) else 0.0
     ranked_indices = sorted(
         range(len(candidate_links)),
         key=lambda idx: float(scores[idx]),
@@ -90,7 +120,10 @@ async def _select_top_links(
         {
             "url": candidate_links[idx]["url"],
             "text": candidate_links[idx]["text"] or candidate_links[idx]["url"],
-            "score": float(scores[idx]),
+            # Normalize to 0-1 so `score` keeps the same contract as the
+            # hybrid RRF score it replaced; raw BM25Okapi scores are
+            # unbounded.
+            "score": float(scores[idx]) / max_score if max_score > 0 else 0.0,
         }
         for idx in ranked_indices
     ]
@@ -298,11 +331,14 @@ async def run_scrape_pipeline(
         max_tokens=int(resolved["scrape_max_link_tokens"]),
         tokenizer_name=tokenizer_name,
     )
+    chunk_pool = _prefilter_chunks_by_bm25(
+        chunks, cleaned_query, _MAX_CONTENT_CHUNK_CANDIDATES
+    )
     ranked = await rank_chunks_hybrid(
         cleaned_query,
-        chunks,
+        chunk_pool,
         embedder=embedder,
-        top_k=len(chunks),
+        top_k=len(chunk_pool),
         rrf_similarity_cutoff=resolved["chunk_rrf_cutoff"],
         dense_weight=resolved["chunk_dense_weight"],
         dense_query_prefix=resolved["dense_query_prefix"],

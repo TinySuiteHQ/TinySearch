@@ -60,7 +60,7 @@ class TruncateTextToMaxTokensTests(unittest.TestCase):
         self.assertIn("First section text", chunks[0]["text"])
         self.assertIn("pip install tinysuite-search", chunks[1]["text"])
 
-    def test_oversized_aria_section_is_not_split(self) -> None:
+    def test_oversized_aria_section_is_windowed_with_heading_preserved(self) -> None:
         tail = "TAIL_SENTINEL"
         text = (
             '- heading "Long section" [level=2]\n'
@@ -74,10 +74,10 @@ class TruncateTextToMaxTokensTests(unittest.TestCase):
             encoding_name="o200k_base",
         )
 
-        self.assertEqual(len(chunks), 1)
-        self.assertEqual(chunks[0]["heading"], "Long section")
-        self.assertGreater(chunks[0]["tokens"], 20)
-        self.assertIn(tail, chunks[0]["text"])
+        self.assertGreater(len(chunks), 1)
+        self.assertTrue(all(chunk["tokens"] <= 20 for chunk in chunks))
+        self.assertTrue(all(chunk["heading"] == "Long section" for chunk in chunks))
+        self.assertIn(tail, chunks[-1]["text"])
 
     def test_unheaded_oversized_text_still_uses_token_windows(self) -> None:
         text = "plain evidence " * 100

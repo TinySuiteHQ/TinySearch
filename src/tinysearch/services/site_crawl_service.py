@@ -53,6 +53,20 @@ async def _route_scrape_request(route: Any) -> None:
     await route.continue_()
 
 
+_ARIA_REF_OR_CURSOR_RE = re.compile(r"\s*\[(?:ref=[^\]]+|cursor=[^\]]+)\]")
+
+
+def _strip_interaction_markers(snapshot: str) -> str:
+    """Drop `[ref=eNN]`/`[cursor=...]` markers from an ARIA snapshot.
+
+    These only resolve against the interactive browser-tool session
+    (see browser_tool_service._validate_ref); the scrape path's context is
+    closed right after extraction, so its refs can never be dereferenced and
+    are pure token overhead here (~10-15% of snapshot text on real pages).
+    """
+    return _ARIA_REF_OR_CURSOR_RE.sub("", snapshot)
+
+
 async def _accessibility_text(page: Any) -> str:
     """Return Playwright AI accessibility text, with visible-text fallback."""
     body = page.locator("body")
@@ -61,7 +75,7 @@ async def _accessibility_text(page: Any) -> str:
     except (AttributeError, TypeError):
         snapshot = ""
     if snapshot and snapshot.strip():
-        return snapshot.strip()
+        return _strip_interaction_markers(snapshot.strip())
     return (await body.inner_text()).strip()
 
 

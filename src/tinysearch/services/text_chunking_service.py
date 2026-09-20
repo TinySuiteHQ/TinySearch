@@ -37,10 +37,10 @@ def chunk_text(
     """
     Structure-aware text chunking.
 
-    Markdown headings and Playwright ARIA heading records define structural
-    sections. Structured sections are kept whole even when they exceed
-    max_chunk_tokens so sparse retrieval can score their full text; unheaded
-    plain text still uses token-window splitting.
+    Markdown headings and Playwright ARIA heading records are preserved as
+    chunk metadata when present, but callers can pass any plain text.
+    Sections exceeding max_chunk_tokens are windowed with overlap_tokens of
+    overlap, same as any other oversized text.
     """
     encoding = resolve_tokenizer(encoding_name, model=model)
 
@@ -86,7 +86,12 @@ def chunk_text(
                         "chunk_id": len(chunks),
                         "heading": current_heading,
                         "text": piece,
-                        "tokens": len(encoding.encode(piece)),
+                        # Use the true slice length, not a re-encode of the
+                        # stripped text: stripping a leading/trailing token's
+                        # partial whitespace can shift the re-encoded count
+                        # past max_chunk_tokens even though the slice itself
+                        # never exceeded the budget.
+                        "tokens": end - start,
                     }
                 )
 
@@ -100,13 +105,6 @@ def chunk_text(
             if current_blocks:
                 flush()
             current_heading = heading
-
-        # Once a structural heading starts a section, preserve that entire
-        # section until the next heading. BM25 can score the full text, while
-        # dense backends may truncate at their own model context limit.
-        if current_heading:
-            current_blocks.append(block)
-            continue
 
         block_tokens = len(encoding.encode(block))
         if block_tokens > max_chunk_tokens:
