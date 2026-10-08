@@ -260,7 +260,9 @@ class SessionBehaviourTests(unittest.IsolatedAsyncioTestCase):
         session._runtime.close = AsyncMock()
 
         session.schedule_idle_shutdown()
-        await asyncio.sleep(0.03)
+        idle_task = session._idle_task
+        self.assertIsNotNone(idle_task)
+        await asyncio.wait_for(idle_task, timeout=1)
 
         self.assertFalse(session.started)
         context.close.assert_awaited_once()
