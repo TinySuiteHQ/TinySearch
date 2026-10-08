@@ -32,6 +32,7 @@
 [![PyPI Downloads](https://static.pepy.tech/personalized-badge/tinysuite-search?period=month&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads%2Fmonth)](https://pepy.tech/projects/tinysuite-search)
 [![Tests](https://github.com/TinySuiteHQ/TinySearch/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/TinySuiteHQ/TinySearch/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-%E2%89%A5%203.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
 [![Release](https://img.shields.io/github/v/release/TinySuiteHQ/TinySearch?label=release)](https://github.com/TinySuiteHQ/TinySearch/releases)
 [![Last Commit](https://img.shields.io/github/last-commit/TinySuiteHQ/TinySearch)](https://github.com/TinySuiteHQ/TinySearch/commits/main)
 [![Docker Pulls](https://img.shields.io/docker/pulls/marcellm01/tinysearch?label=docker%20pulls)](https://hub.docker.com/r/marcellm01/tinysearch)
