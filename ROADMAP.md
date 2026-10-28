@@ -15,7 +15,7 @@ The roadmap is intentionally ordered around capability rather than tool count. N
 - **Keep the primitive set small.** Add capabilities when they unlock a distinct part of web investigation, not just because a larger web platform exposes them.
 - **Let the model drive the loop.** Search, read, interact, reason, and repeat should remain composable rather than hidden behind one monolithic research call.
 - **Browser interaction is a retrieval primitive.** Clicking, scrolling, waiting, or typing is useful when it helps an agent reach information that cannot otherwise be retrieved. TinySearch does not need to become a general-purpose browser automation framework.
-- **Prefer existing infrastructure over reimplementing it.** Compose proven search, crawling, browser, and model components such as SearXNG, DDGS, Crawl4AI, Playwright, and external CDP browsers rather than replacing them.
+- **Prefer existing infrastructure over reimplementing it.** Compose proven search, crawling, browser, and model components such as SearXNG, DDGS, Playwright, and external CDP browsers rather than replacing them.
 - **Token efficiency supports usability; it does not define it.** Filtering, ranking, and bounded outputs should reduce unnecessary context without preventing the agent from asking for more evidence or changing course.
 - **Stay useful without an internal LLM.** The core toolkit should remain directly usable by an external agent. Higher-level delegated research can be layered on later without replacing the primitives underneath it.
 - **Measure before adding autonomy.** Higher-level automation should be evaluated against the underlying primitives rather than assumed to be better because it is more agentic.
@@ -51,7 +51,7 @@ The resulting page should flow back through TinySearch's existing extraction and
 
 ### Authenticated browser sessions — #59
 
-Add first-class support for already-authenticated browser sessions using Crawl4AI-supported session/profile mechanisms and external CDP browsers.
+Add first-class support for already-authenticated browser sessions using Playwright storage-state and profile mechanisms and external CDP browsers.
 
 TinySearch should be able to operate inside sites where the user has already logged in without owning credentials or implementing login flows itself.
 

@@ -377,8 +377,8 @@ Full key reference, SearXNG JSON-output setup, and Compose details live in the
 after load, content behind a cookie interstitial, a "load more" control, or a
 client-side search UI. For those pages TinySearch drives a real browser.
 
-This costs nothing extra to install. TinySearch already depends on Playwright
-through Crawl4AI and already installs its Chromium for scraping, so the browser
+This costs nothing extra to install. TinySearch already scrapes pages with
+Playwright and installs its Chromium for that, so the browser
 tools reuse the same driver and the same browser: no second runtime, no second
 browser, no child process.
 
