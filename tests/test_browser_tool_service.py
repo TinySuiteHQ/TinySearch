@@ -328,6 +328,124 @@ class CallToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("showing the first 50 of 900", result)
 
 
+class _Connection:
+    """Stands in for an MCP client session: hashable, weak-referenceable."""
+
+
+class SessionOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.addCleanup(bt._sessions.clear)
+        self.addCleanup(bt._live.clear)
+        self.addCleanup(setattr, bt, "_shared_session", None)
+        bt._sessions.clear()
+        bt._live.clear()
+        bt._shared_session = None
+
+    def test_each_connection_gets_its_own_browser(self) -> None:
+        config = normalize_config()
+        alice, bob = _Connection(), _Connection()
+        self.assertIs(bt.get_session(config, alice), bt.get_session(config, alice))
+        self.assertIsNot(bt.get_session(config, alice), bt.get_session(config, bob))
+        self.assertIsNot(bt.get_session(config, alice), bt.get_session(config))
+
+    def test_direct_api_use_keeps_one_shared_session(self) -> None:
+        config = normalize_config()
+        self.assertIs(bt.get_session(config), bt.get_session(config))
+
+    async def test_a_new_caller_waits_for_a_slot_and_gets_it_when_one_frees(self) -> None:
+        config = normalize_config({"browser_max_sessions": 1, "browser_session_wait_seconds": 5})
+        first, second = _Connection(), _Connection()
+        holder = await bt.acquire_session(config, first)
+        waiting = asyncio.create_task(bt.acquire_session(config, second))
+        await asyncio.sleep(0.1)
+        self.assertFalse(waiting.done())
+        bt._live.discard(holder)  # what close() does when the browser shuts
+        session = await asyncio.wait_for(waiting, timeout=2)
+        self.assertIs(session, bt.get_session(config, second))
+        self.assertTrue(session.holds_slot)
+
+    async def test_a_waiter_gives_up_after_the_wait(self) -> None:
+        config = normalize_config({"browser_max_sessions": 1, "browser_session_wait_seconds": 0.3})
+        await bt.acquire_session(config, _Connection())
+        started = asyncio.get_running_loop().time()
+        with self.assertRaises(bt.BrowserToolError) as raised:
+            await bt.acquire_session(config, _Connection())
+        self.assertGreaterEqual(asyncio.get_running_loop().time() - started, 0.25)
+        self.assertIn("stayed in use for 0.3s", str(raised.exception))
+
+    async def test_zero_wait_refuses_at_once(self) -> None:
+        config = normalize_config({"browser_max_sessions": 1, "browser_session_wait_seconds": 0})
+        await bt.acquire_session(config, _Connection())
+        with self.assertRaises(bt.BrowserToolError):
+            await bt.acquire_session(config, _Connection())
+
+    async def test_the_slot_holder_never_waits_for_itself(self) -> None:
+        config = normalize_config({"browser_max_sessions": 1, "browser_session_wait_seconds": 0})
+        connection = _Connection()
+        first = await bt.acquire_session(config, connection)
+        self.assertIs(await bt.acquire_session(config, connection), first)
+
+    async def test_closing_a_browser_releases_its_slot(self) -> None:
+        config = normalize_config({"browser_max_sessions": 1})
+        session = await bt.acquire_session(config, _Connection())
+        session._runtime = MagicMock(persist_storage_state=AsyncMock(), close=AsyncMock())
+        await session.close()
+        self.assertFalse(session.holds_slot)
+
+    async def test_a_call_that_leaves_nothing_open_returns_its_slot(self) -> None:
+        config = normalize_config({"browser_max_sessions": 1, "browser_session_wait_seconds": 0})
+        connection = _Connection()
+        await bt.call_tool("close", config, owner=connection)  # "Browser is not open."
+        self.assertFalse(bt.get_session(config, connection).holds_slot)
+        await bt.acquire_session(config, _Connection())
+
+    def test_config_rejects_a_negative_wait(self) -> None:
+        with self.assertRaises(ValueError):
+            normalize_config({"browser_session_wait_seconds": -1})
+
+    def test_a_connection_that_goes_away_drops_its_entry(self) -> None:
+        connection = _Connection()
+        bt.get_session(normalize_config(), connection)
+        del connection
+        self.assertEqual(len(bt._sessions), 0)
+
+    async def test_an_open_browser_outlives_its_connection_until_it_closes(self) -> None:
+        config = normalize_config({"browser_max_sessions": 1, "browser_session_wait_seconds": 0})
+        connection = _Connection()
+        session = await bt.acquire_session(config, connection)
+        del connection
+        self.assertEqual(len(bt._sessions), 0)
+        with self.assertRaises(bt.BrowserToolError):  # still counts
+            await bt.acquire_session(config, _Connection())
+        session.close = AsyncMock()
+        await bt.shutdown_session()
+        session.close.assert_awaited_once()  # and is still closed at shutdown
+
+    async def test_shutdown_closes_every_browser(self) -> None:
+        config = normalize_config()
+        keep = [_Connection(), _Connection()]
+        sessions = [bt.get_session(config, c) for c in keep] + [bt.get_session(config)]
+        for session in sessions:
+            session.close = AsyncMock()
+        await bt.shutdown_session()
+        for session in sessions:
+            session.close.assert_awaited_once()
+        self.assertEqual(len(bt._sessions), 0)
+        self.assertIsNone(bt._shared_session)
+
+    async def test_call_tool_routes_to_the_callers_session(self) -> None:
+        connection = _Connection()
+        session = MagicMock()
+        session.look = AsyncMock(return_value="ok")
+        with patch.object(bt, "acquire_session", AsyncMock(return_value=session)) as acquire:
+            await bt.call_tool("look", normalize_config(), owner=connection)
+        self.assertIs(acquire.call_args.args[1], connection)
+
+    def test_config_rejects_a_nonpositive_limit(self) -> None:
+        with self.assertRaises(ValueError):
+            normalize_config({"browser_max_sessions": 0})
+
+
 class ToolRegistrationTests(unittest.TestCase):
     def setUp(self) -> None:
         from tinysearch.servers import mcp_server
@@ -367,3 +485,21 @@ class ToolRegistrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class McpAdapterOwnershipTests(unittest.IsolatedAsyncioTestCase):
+    async def test_browser_tools_are_keyed_by_the_calling_connection(self) -> None:
+        from tinysearch.servers import mcp_server
+
+        connection = _Connection()
+        context = MagicMock()
+        context.request_context.session = connection
+        with patch.object(mcp_server.mcp, "get_context", return_value=context), \
+                patch("tinysearch.services.browser_tool_service.call_tool", AsyncMock(return_value="ok")) as call:
+            await mcp_server._browser("look")
+        self.assertIs(call.call_args.kwargs["owner"], connection)
+
+    def test_outside_a_request_the_shared_session_is_used(self) -> None:
+        from tinysearch.servers import mcp_server
+
+        self.assertIsNone(mcp_server._client_connection())

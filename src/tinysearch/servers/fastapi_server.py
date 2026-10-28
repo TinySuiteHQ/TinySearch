@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 from tinysearch import core
 from tinysearch.services import browser_tool_service
+from tinysearch.services.activity_service import record_quietly
 from tinysearch.services.tinysearch_config_service import (
     load_tinysearch_config,
     save_tinysearch_config,
@@ -234,12 +236,17 @@ async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
 @app.post("/scrape")
 async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
     """Scrape one to five independent URL/query pairs with per-item outcomes."""
-    return await core.scrape_urls(
+    started = time.monotonic()
+    result = await core.scrape_urls(
         [item.model_dump(mode="json") for item in request.items],
         max_tokens=request.max_tokens,
         config=load_tinysearch_config(),
         crawler_session=_crawler_session,
     )
+    # No caller identity on this API: aggregate counts only, if anything.
+    record_quietly("scrape", result, principal=None,
+                   latency_ms=round((time.monotonic() - started) * 1000))
+    return result
 
 
 async def _browser_endpoint(name: str, arguments: dict[str, Any]) -> dict[str, str]:
@@ -291,7 +298,11 @@ async def search_endpoint(request: SearchRequest) -> dict[str, Any]:
             file=sys.stderr,
             flush=True,
         )
-    return await core.search(
+    started = time.monotonic()
+    result = await core.search(
         request.normalized_items(),
         config=load_tinysearch_config(),
     )
+    record_quietly("search", result, principal=None,
+                   latency_ms=round((time.monotonic() - started) * 1000))
+    return result

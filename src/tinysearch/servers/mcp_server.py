@@ -105,10 +105,9 @@ def _route_identity(route: BaseRoute) -> tuple[Any, ...]:
     return ("other", type(route).__name__, id(route))
 
 
-async def _run_streamable_http_combined_async() -> None:
+def _build_streamable_http_app() -> Any:
     """Streamable HTTP on /mcp plus SSE on /mcp/sse; sessionless GET /mcp → SSE for strict-URL clients."""
 
-    import uvicorn
     from starlette.applications import Starlette
 
     stream_app = mcp.streamable_http_app()
@@ -140,14 +139,19 @@ async def _run_streamable_http_combined_async() -> None:
     extra_sse = [
         r for r in sse_starlette.routes if _route_identity(r) not in primary_keys
     ]
-    app = Starlette(
+    return Starlette(
         debug=mcp.settings.debug,
         routes=bridged_stream_routes + extra_sse,
         middleware=_streamable_http_cors_middleware() + stream_app.user_middleware,
         lifespan=stream_app.router.lifespan_context,
     )
+
+
+async def _run_streamable_http_combined_async() -> None:
+    import uvicorn
+
     config = uvicorn.Config(
-        app,
+        _build_streamable_http_app(),
         host=mcp.settings.host,
         port=mcp.settings.port,
         log_level=mcp.settings.log_level.lower(),
@@ -316,6 +320,7 @@ async def search_tool(
     item_count = len(items) if items is not None else (1 if query is not None else 0)
     _log(f"search called items={item_count}")
     result = await core.search(items, query=query, domains=domains, config=config)
+    _record("search", result, started)
     _log(
         f"search returning items={result['stats']['search_item_count']} "
         f"attempts={result['stats']['backend_attempt_count']} elapsed={time.monotonic() - started:.2f}s"
@@ -341,6 +346,7 @@ async def scrape_urls_tool(
         Field(description="One to five items, each with url and optional query."),
     ],
 ) -> str:
+    started = time.monotonic()
     config = load_tinysearch_config()
     max_tokens = config["scrape_max_tokens"]
     _log(f"scrape_urls called items={len(items)} max_tokens={max_tokens}")
@@ -350,17 +356,59 @@ async def scrape_urls_tool(
         config=config,
         crawler_session=_crawler_session,
     )
+    _record("scrape", result, started)
     from tinysearch.services.grounded_prompt_service import format_url_grounded_answers
 
     return format_url_grounded_answers(results=result["results"])
 
 
+def _client_connection() -> object | None:
+    """The MCP session this call arrived on, or None outside a request."""
+    try:
+        return mcp.get_context().request_context.session
+    except (LookupError, ValueError):
+        return None
+
+
+def _record(kind: str, result: dict[str, Any], started: float) -> None:
+    """Opt-in activity (services/activity_service.py); a no-op while it is off."""
+    from tinysearch.services.activity_service import record_quietly
+    from tinysearch.services.management_service import current_principal
+
+    record_quietly(
+        kind,
+        result,
+        principal=current_principal(),
+        latency_ms=round((time.monotonic() - started) * 1000),
+    )
+
+
 async def _browser(name: str, **arguments: Any) -> str:
-    """Run one browser tool against the shared session."""
+    """Run one browser tool against this client connection's own browser."""
+    from tinysearch.services.activity_service import record_quietly
     from tinysearch.services.browser_tool_service import call_tool
+    from tinysearch.services.management_service import current_principal
 
     _log(f"browser_{name} called")
-    return await call_tool(name, load_tinysearch_config(), **arguments)
+    started = time.monotonic()
+    error_code = None
+    try:
+        return await call_tool(
+            name, load_tinysearch_config(), owner=_client_connection(), **arguments
+        )
+    except Exception as exc:
+        error_code = type(exc).__name__
+        raise
+    finally:
+        record_quietly(
+            "browser",
+            name,
+            url=arguments.get("url") if name == "navigate" else None,
+            ok=error_code is None,
+            error_code=error_code,
+            principal=current_principal(),
+            latency_ms=round((time.monotonic() - started) * 1000),
+        )
 
 
 _FIND_HELP = (
@@ -496,6 +544,72 @@ def unregister_browser_tools_if_disabled() -> list[str]:
     return removed
 
 
+_management_registered = False
+
+
+def register_management() -> None:
+    """Add the tinysuite.manage/1 resources and, with history on, its clear tool.
+
+    Only when management is on, so a server with it off has nothing to
+    discover. Access is decided per message inside each view
+    (services/management_service.py).
+    """
+    global _management_registered
+    if _management_registered:
+        return
+    import json
+
+    from tinysearch.services import management_service as manage
+
+    def views(name: str) -> str:
+        return manage.VIEW_URI.format(view=name)
+
+    @mcp.resource(
+        manage.MANIFEST_URI,
+        name="tinysearch-management",
+        title="TinySearch management",
+        description="Manifest of the activity and rules views a client UI can show.",
+        mime_type=manage.MANIFEST_MIME,
+    )
+    def management_manifest() -> str:
+        return json.dumps(manage.manifest())
+
+    @mcp.resource(views("overview"), name="tinysearch-overview", mime_type="application/json")
+    def management_overview(params: str) -> str:
+        return json.dumps(manage.overview_view(params, load_tinysearch_config()))
+
+    @mcp.resource(views("domains"), name="tinysearch-domains", mime_type="application/json")
+    def management_domains(params: str) -> str:
+        return json.dumps(manage.domains_view(params))
+
+    @mcp.resource(views("rules"), name="tinysearch-rules", mime_type="application/json")
+    def management_rules(params: str) -> str:
+        return json.dumps(manage.rules_view(params, load_tinysearch_config()))
+
+    @mcp.resource(views("activity"), name="tinysearch-activity", mime_type="application/json")
+    def management_activity(params: str) -> str:
+        return json.dumps(manage.activity_view(params))
+
+    @mcp.resource(views("pages"), name="tinysearch-pages", mime_type="application/json")
+    def management_pages(params: str) -> str:
+        return json.dumps(manage.pages_view(params))
+
+    if manage.history_tool_enabled():
+        @mcp.tool(
+            name="clear_search_history",
+            title="Clear Search History",
+            description=(
+                "Delete the caller's own recorded search history on this server. "
+                "Only call this when the user explicitly asks to clear it."
+            ),
+            annotations={"destructiveHint": True, "idempotentHint": True},
+        )
+        async def clear_search_history_tool() -> dict[str, Any]:
+            return manage.clear_own_history()
+
+    _management_registered = True
+
+
 def main() -> None:
     _enable_traceback_dump()
     configure_from_environment()
@@ -506,6 +620,14 @@ def main() -> None:
             "MCP_TRANSPORT must be one of: stdio, sse, streamable-http "
             "(default stdio for IDE-spawned MCP; set env only for standalone HTTP/SSE)"
         )
+    from tinysearch.services.management_service import (
+        check_management_startup,
+        management_enabled,
+    )
+
+    check_management_startup(transport)
+    if management_enabled():
+        register_management()
     try:
         if transport == "streamable-http":
             import anyio

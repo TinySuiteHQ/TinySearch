@@ -34,6 +34,7 @@ import inspect
 import json
 import re
 import time
+import weakref
 from collections.abc import Mapping
 from typing import Any
 
@@ -278,6 +279,11 @@ class BrowserSession:
         self._idle_task: asyncio.Task[None] | None = None
 
     @property
+    def holds_slot(self) -> bool:
+        """Counts against browser_max_sessions: from hand-out until its browser closes."""
+        return self in _live
+
+    @property
     def started(self) -> bool:
         return self._context is not None
 
@@ -307,6 +313,7 @@ class BrowserSession:
                     pass
             await self._runtime.close()
             self._context = self._page = None
+            _live.discard(self)
 
     def _cancel_idle_shutdown(self) -> None:
         task, self._idle_task = self._idle_task, None
@@ -493,33 +500,95 @@ class BrowserSession:
         return "Browser closed."
 
 
-_session: BrowserSession | None = None
+# One interactive browser per owner. The MCP adapter passes its client
+# connection, so two callers sharing a server never see each other's page,
+# tabs or cookies; `None` is the single shared session of direct API use.
+# Weak keys: a connection that goes away takes its entry with it, and the
+# browser itself still closes on its idle timer.
+_sessions: weakref.WeakKeyDictionary[object, BrowserSession] = weakref.WeakKeyDictionary()
+_shared_session: BrowserSession | None = None
+# Sessions holding a slot, held strongly: a client can disconnect while its
+# browser is still open, and that browser must keep counting against the
+# limit, and still be closed at shutdown, until it actually shuts.
+_live: set[BrowserSession] = set()
 
 
-def get_session(config: Mapping[str, Any]) -> BrowserSession:
-    global _session
+def _all_sessions() -> list[BrowserSession]:
+    shared = [_shared_session] if _shared_session is not None else []
+    return list({*shared, *_sessions.values(), *_live})
+
+
+def get_session(config: Mapping[str, Any], owner: object | None = None) -> BrowserSession:
+    """The owner's session object, created on first use. Holds no slot by itself."""
+    global _shared_session
     if not browser_backend_enabled(config):
         raise BrowserDisabledError(
             "browser tools are disabled; set browser_backend to 'playwright' to enable them"
         )
-    if _session is None:
-        _session = BrowserSession(config)
-    return _session
+    existing = _shared_session if owner is None else _sessions.get(owner)
+    if existing is not None:
+        return existing
+    session = BrowserSession(config)
+    if owner is None:
+        _shared_session = session
+    else:
+        _sessions[owner] = session
+    return session
+
+
+_SLOT_POLL_SECONDS = 0.25
+
+
+async def acquire_session(
+    config: Mapping[str, Any], owner: object | None = None
+) -> BrowserSession:
+    """The owner's session, holding one of browser_max_sessions slots.
+
+    A caller that already holds a slot gets straight through. Anyone else
+    waits for a slot to free up (a browser closing, by close() or its idle
+    timer) for up to browser_session_wait_seconds, then is refused. Claiming
+    the slot happens in the same step as the check, with no await between,
+    so two waiters can never both take the last one.
+    """
+    session = get_session(config, owner)
+    if session.holds_slot:
+        return session
+    limit = int(config.get("browser_max_sessions") or 0)
+    wait = float(config.get("browser_session_wait_seconds") or 0.0)
+    deadline = time.monotonic() + wait
+    while limit and len(_live) >= limit:
+        if time.monotonic() >= deadline:
+            raise BrowserToolError(
+                f"all {limit} browser sessions stayed in use for {wait:g}s; "
+                "try again shortly"
+            )
+        await asyncio.sleep(_SLOT_POLL_SECONDS)
+    _live.add(session)
+    return session
 
 
 async def shutdown_session() -> None:
-    """Close the browser during a server's graceful shutdown."""
-    global _session
-    session, _session = _session, None
-    if session is not None:
+    """Close every browser during a server's graceful shutdown."""
+    global _shared_session
+    sessions = _all_sessions()
+    _shared_session = None
+    _sessions.clear()
+    _live.clear()
+    for session in sessions:
         await session.close()
 
 
-async def call_tool(name: str, config: Mapping[str, Any], **arguments: Any) -> str:
+async def call_tool(
+    name: str,
+    config: Mapping[str, Any],
+    *,
+    owner: object | None = None,
+    **arguments: Any,
+) -> str:
     """Run one browser tool and return its capped text response."""
     if name not in TOOL_NAMES:
         raise BrowserToolError(f"unknown browser tool {name!r}")
-    session = get_session(config)
+    session = await acquire_session(config, owner)
 
     with span_scope(
         "tinysearch.browser_tool",
@@ -543,6 +612,11 @@ async def call_tool(name: str, config: Mapping[str, Any], **arguments: Any) -> s
             raise BrowserToolError(f"{name} failed: {exc}") from exc
         finally:
             session.schedule_idle_shutdown()
+            # Nothing is open (a failed start, close() on a fresh session):
+            # the slot goes back now rather than waiting for an idle timer
+            # that was never armed.
+            if not session.started:
+                _live.discard(session)
         telemetry.complete()
 
     return cap(result, int(config.get("browser_response_char_budget") or 0))
