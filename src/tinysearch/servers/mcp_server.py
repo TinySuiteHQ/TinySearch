@@ -355,12 +355,22 @@ async def scrape_urls_tool(
     return format_url_grounded_answers(results=result["results"])
 
 
+def _client_connection() -> object | None:
+    """The MCP session this call arrived on, or None outside a request."""
+    try:
+        return mcp.get_context().request_context.session
+    except (LookupError, ValueError):
+        return None
+
+
 async def _browser(name: str, **arguments: Any) -> str:
-    """Run one browser tool against the shared session."""
+    """Run one browser tool against this client connection's own browser."""
     from tinysearch.services.browser_tool_service import call_tool
 
     _log(f"browser_{name} called")
-    return await call_tool(name, load_tinysearch_config(), **arguments)
+    return await call_tool(
+        name, load_tinysearch_config(), owner=_client_connection(), **arguments
+    )
 
 
 _FIND_HELP = (

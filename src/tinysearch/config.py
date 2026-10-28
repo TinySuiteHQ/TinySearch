@@ -65,6 +65,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "browser_response_char_budget": 20000,
     "browser_idle_shutdown_seconds": 300.0,
     "browser_action_timeout_seconds": 10.0,
+    "browser_max_sessions": 4,
+    "browser_session_wait_seconds": 30.0,
     "browser_proxy_server": "",
     "browser_proxy_username": "",
     "browser_proxy_password": "",
@@ -88,6 +90,7 @@ _INT_FIELDS = {
     "dense_document_embed_batch_size",
     "browser_response_char_budget",
     "browser_snapshot_depth",
+    "browser_max_sessions",
 }
 _FLOAT_FIELDS = {
     "chunk_rrf_cutoff",
@@ -97,6 +100,7 @@ _FLOAT_FIELDS = {
     "ddgs_timeout_seconds",
     "browser_idle_shutdown_seconds",
     "browser_action_timeout_seconds",
+    "browser_session_wait_seconds",
 }
 
 
@@ -126,6 +130,7 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     for key in (
         "search_max_concurrent_items",
         "scrape_max_link_tokens",
+        "browser_max_sessions",
     ):
         if config[key] <= 0:
             raise ValueError(f"tinysearch config {key} must be positive")
@@ -138,6 +143,10 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     ):
         if config[key] <= 0:
             raise ValueError(f"tinysearch config {key} must be positive")
+    if config["browser_session_wait_seconds"] < 0:
+        raise ValueError(
+            "tinysearch config browser_session_wait_seconds must be zero (no wait) or positive"
+        )
     for key in ("browser_response_char_budget", "browser_snapshot_depth"):
         if config[key] < 0:
             raise ValueError(

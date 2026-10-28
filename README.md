@@ -163,6 +163,13 @@ The MCP and FastAPI servers keep the scraper browser warm between nearby
 requests, then close it after `browser_idle_shutdown_seconds`. Direct Python
 calls retain their short-lived, caller-owned lifecycle.
 
+The interactive `browser_*` tools give every MCP client connection its own
+browser and page, so clients sharing one server never see each other's tabs
+or cookies. At most `browser_max_sessions` (default 4) are open at once; a
+new caller waits up to `browser_session_wait_seconds` (default 30) for one to
+close, explicitly or after its idle timeout, then gets an error. The FastAPI
+`/browser/*` endpoints share one browser, as before.
+
 <p align="center">
   <img src="assets/demo_terminal_prompt.gif" alt="TinySearch CLI setup and first run in a terminal" width="780" />
 </p>
