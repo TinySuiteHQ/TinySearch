@@ -12,8 +12,11 @@ Off unless ``TINYSEARCH_MANAGEMENT=on``. Who may read what:
   are not offered at all.
 - Over HTTP, a caller's own history (activity, pages) needs a trusted
   identity: ``TINYSEARCH_TRUSTED_USER_HEADER`` sent by a peer inside
-  ``TINYSEARCH_TRUSTED_PROXY_CIDRS``, checked on every message, never taken
-  from tool arguments.
+  ``TINYSEARCH_TRUSTED_PROXY_CIDRS`` together with the proxy's shared
+  ``X-TinySearch-Proxy-Token``, checked on every message, never taken from
+  tool arguments. The address alone does not prove the proxy sent it:
+  anything else on that network (another container, a local program when
+  the server listens on loopback) could otherwise name any user.
 
 Turning management on over HTTP with neither a token nor a trusted identity
 refuses to start, rather than serving views to whoever can reach the port.
@@ -36,11 +39,14 @@ MANIFEST_URI = "tinysearch://manage/manifest"
 MANIFEST_MIME = "application/vnd.tinysuite.manage+json"
 CONTRACT = "tinysuite.manage/1"
 VIEW_URI = "tinysearch://manage/views/{view}/{{params}}"
+ACTIVITY_ITEM_URI = "tinysearch://manage/items/activity/{id}"
 LOCAL_PRINCIPAL = "local"
 
 _ON = {"on", "1", "true", "yes"}
 _OFF = {"", "off", "0", "false", "no"}
 _MIN_TOKEN_CHARS = 24
+_MIN_PROXY_TOKEN_CHARS = 32
+PROXY_TOKEN_HEADER = "X-TinySearch-Proxy-Token"
 _PAGE_MAX = 100
 _SEARCH_MAX = 200
 _IDENTITY_RE = re.compile(r"^[^\x00-\x1f\x7f]{1,256}$")
@@ -69,13 +75,16 @@ def management_token() -> str | None:
     return token or None
 
 
-def _trusted_identity() -> tuple[str, tuple[Any, ...]] | None:
+def _trusted_identity() -> tuple[str, tuple[Any, ...], str] | None:
     header = os.environ.get("TINYSEARCH_TRUSTED_USER_HEADER", "").strip()
     cidrs = os.environ.get("TINYSEARCH_TRUSTED_PROXY_CIDRS", "").strip()
+    token = os.environ.get("TINYSEARCH_TRUSTED_PROXY_TOKEN", "").strip()
     if not header and not cidrs:
         return None
     if not _HEADER_RE.fullmatch(header):
         raise ValueError("TINYSEARCH_TRUSTED_USER_HEADER must be an HTTP header name")
+    if header.lower() == PROXY_TOKEN_HEADER.lower():
+        raise ValueError(f"TINYSEARCH_TRUSTED_USER_HEADER cannot be {PROXY_TOKEN_HEADER}")
     try:
         networks = tuple(
             ipaddress.ip_network(part.strip(), strict=False)
@@ -88,7 +97,18 @@ def _trusted_identity() -> tuple[str, tuple[Any, ...]] | None:
             "TINYSEARCH_TRUSTED_USER_HEADER needs TINYSEARCH_TRUSTED_PROXY_CIDRS: "
             "the header is only believed from those peers"
         )
-    return header, networks
+    if len(token) < _MIN_PROXY_TOKEN_CHARS:
+        raise ValueError(
+            f"TINYSEARCH_TRUSTED_USER_HEADER needs TINYSEARCH_TRUSTED_PROXY_TOKEN "
+            f"(at least {_MIN_PROXY_TOKEN_CHARS} characters): the proxy sends it as "
+            f"{PROXY_TOKEN_HEADER} on every request"
+        )
+    return header, networks, token
+
+
+def multi_tenant() -> bool:
+    """Whether callers are told apart (a trusted identity is configured)."""
+    return _trusted_identity() is not None
 
 
 def check_management_startup(transport: str) -> None:
@@ -124,7 +144,7 @@ def principal_from_scope(scope: Mapping[str, Any]) -> str | None:
     identity = _trusted_identity()
     if identity is None:
         return None
-    header, networks = identity
+    header, networks, token = identity
     client = scope.get("client")
     try:
         peer = ipaddress.ip_address(client[0] if client else "")
@@ -132,8 +152,15 @@ def principal_from_scope(scope: Mapping[str, Any]) -> str | None:
         return None
     if not any(peer in network for network in networks):
         return None
-    wanted = header.lower().encode("ascii")
-    values = [bytes(v) for k, v in scope.get("headers", []) if bytes(k).lower() == wanted]
+
+    def sent(name: str) -> list[bytes]:
+        wanted = name.lower().encode("ascii")
+        return [bytes(v) for k, v in scope.get("headers", []) if bytes(k).lower() == wanted]
+
+    tokens = sent(PROXY_TOKEN_HEADER)
+    if len(tokens) != 1 or not hmac.compare_digest(tokens[0].strip(), token.encode()):
+        return None
+    values = sent(header)
     if len(values) != 1:
         return None
     try:
@@ -192,7 +219,7 @@ def authorize(view_scope: str) -> None:
 
 def history_tool_enabled() -> bool:
     """Whether callers may clear their own history (a tool, so only when it means something)."""
-    return management_enabled() and activity.activity_mode() == "history"
+    return management_enabled() and activity.activity_mode() in activity.DETAILED_MODES
 
 
 def _version() -> str:
@@ -241,17 +268,21 @@ def manifest() -> dict[str, Any]:
             "target": "view", "args": {}, "destructive": True,
             "confirm": "Delete your whole search history on this server?",
         }] if history_tool_enabled() else []
+        shown = ([{"key": "shown_chars", "label": "Shown (chars)", "format": "number"}]
+                 if activity.activity_mode() == "content" else [])
         views += [
             {"id": "activity", "title": "My searches", "kind": "table", "scope": "user",
              "resource": VIEW_URI.format(view="activity"), "pageSize": 50,
              "params": [{"name": "q", "label": "Search", "type": "text", "maxLength": _SEARCH_MAX}],
              "rowKey": "id",
+             "detail": {"resource": ACTIVITY_ITEM_URI},
              "columns": [
                  {"key": "ts", "label": "When", "format": "datetime"},
                  {"key": "operation", "label": "What", "format": "text"},
                  {"key": "query", "label": "Query", "format": "text"},
                  {"key": "outcome", "label": "Outcome", "format": "text"},
                  {"key": "latency_ms", "label": "ms", "format": "number"},
+                 *shown,
              ],
              "actions": clear},
             {"id": "pages", "title": "My pages", "kind": "table", "scope": "user",
@@ -317,7 +348,7 @@ def _collection_notice(needed: str) -> str | None:
     mode = activity.activity_mode()
     if mode == "off":
         return f"Activity collection is off on this server (TINYSEARCH_ACTIVITY), so there is no {needed} to show."
-    if needed == "history" and mode != "history":
+    if needed == "history" and mode not in activity.DETAILED_MODES:
         return "This server keeps aggregate counts only (TINYSEARCH_ACTIVITY=aggregate), not individual searches."
     return None
 
@@ -393,7 +424,7 @@ def activity_view(raw: str) -> dict[str, Any]:
     params = decode_params(raw, {"q", "offset", "limit"})
     offset, limit = _page(params)
     notice = _collection_notice("history")
-    if activity.activity_mode() != "history":
+    if activity.activity_mode() not in activity.DETAILED_MODES:
         return _table({}, offset, limit, notice)
     result = activity.get_store().events_for(
         current_principal() or "", search=(params.get("q") or "")[:_SEARCH_MAX] or None,
@@ -407,13 +438,42 @@ def pages_view(raw: str) -> dict[str, Any]:
     params = decode_params(raw, {"q", "source", "offset", "limit"})
     offset, limit = _page(params)
     notice = _collection_notice("history")
-    if activity.activity_mode() != "history":
+    if activity.activity_mode() not in activity.DETAILED_MODES:
         return _table({}, offset, limit, notice)
     result = activity.get_store().urls_for(
         current_principal() or "", source=params.get("source") or None,
         search=(params.get("q") or "")[:_SEARCH_MAX] or None, offset=offset, limit=limit,
     )
     return _table(result, offset, limit)
+
+
+def activity_item(raw_id: str) -> dict[str, Any]:
+    """One of the caller's own events: what ran, on which URLs, and what it showed."""
+    authorize("user")
+    try:
+        event_id = int(unquote(raw_id))
+    except ValueError as exc:
+        raise ValueError("an activity id is a number") from exc
+    event = (activity.get_store().event_for(current_principal() or "", event_id)
+             if activity.activity_mode() in activity.DETAILED_MODES else None)
+    # Someone else's id reads exactly like one that does not exist.
+    if event is None:
+        raise ManagementAccessError("no such activity on record for this caller")
+    urls = "\n".join(f"{u['url']}  ({u['source']}, {u['outcome']})" for u in event.pop("urls"))
+    content = event.pop("content")
+    if content is None:
+        content = ("Not kept: this server records what was shown only with TINYSEARCH_ACTIVITY=content."
+                   if activity.activity_mode() != "content" else "Nothing was shown (the call failed).")
+    fields = [
+        {"label": "When", "value": event["ts"], "format": "datetime"},
+        {"label": "What", "value": event["operation"]},
+        {"label": "Query", "value": event["query"], "format": "multiline"},
+        {"label": "Outcome", "value": event["outcome"]},
+        {"label": "Error", "value": event["error_code"]},
+        {"label": "URLs", "value": urls or None, "format": "multiline"},
+        {"label": "What the model was shown", "value": content, "format": "multiline"},
+    ]
+    return {"fields": fields, "row": event}
 
 
 def clear_own_history() -> dict[str, Any]:

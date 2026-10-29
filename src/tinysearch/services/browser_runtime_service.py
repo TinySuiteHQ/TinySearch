@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import secrets
 import sys
 from collections.abc import Mapping
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
+
+from tinysearch.paths import private_file
 
 # Connection.cleanup() (playwright._impl._connection) cancels its internal
 # `_init_task` without awaiting or clearing the reference, so the Task (and
@@ -47,11 +52,60 @@ def _ensure_shutdown_noise_filtered() -> None:
     _shutdown_noise_filter_installed = True
 
 
+_SHARED = object()
+
+
+def storage_state_for(config: Mapping[str, Any], principal: str | None) -> Path | None:
+    """The saved cookies and local storage a browser for ``principal`` may use.
+
+    A server that does not tell callers apart keeps the one configured file,
+    as before. One that does (a trusted identity is configured) never shares
+    it: each caller gets their own file next to it, named by a salted hash,
+    and a caller with no identity -- or a browser shared by every caller,
+    such as the page fetcher's -- gets none. Otherwise one person's logins
+    would be loaded into everyone else's browser.
+    """
+    raw = str(config.get("browser_storage_state_path") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw)
+    from tinysearch.services.management_service import LOCAL_PRINCIPAL, multi_tenant
+
+    if not multi_tenant() or principal == LOCAL_PRINCIPAL:
+        return path
+    if principal is None:
+        return None
+    digest = hashlib.sha256(f"{_storage_salt(path)}:{principal}".encode()).hexdigest()[:32]
+    return path.with_name(f"{path.stem}.{digest}{path.suffix or '.json'}")
+
+
+def _storage_salt(path: Path) -> str:
+    """A random salt kept beside the storage files, so their names reveal no one."""
+    salt_path = path.with_name(f".{path.name}.salt")
+    try:
+        salt = salt_path.read_text(encoding="utf-8").strip()
+        if salt:
+            return salt
+    except FileNotFoundError:
+        pass
+    salt_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    salt = secrets.token_hex(16)
+    try:
+        fd = os.open(salt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:  # another call created it first
+        return salt_path.read_text(encoding="utf-8").strip()
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(salt)
+    return salt
+
+
 class PlaywrightRuntime:
     """Own one Playwright driver/browser and create isolated contexts on demand."""
 
-    def __init__(self, config: Mapping[str, Any] | None = None) -> None:
+    def __init__(self, config: Mapping[str, Any] | None = None, *, storage_state: Path | None | object = _SHARED) -> None:
         self._config = dict(config or {})
+        # Unless told whose browser this is, it is shared: storage_state_for(None).
+        self._storage_state = storage_state_for(self._config, None) if storage_state is _SHARED else storage_state
         self._playwright: Any = None
         self._browser: Any = None
         self._owns_browser = True
@@ -62,8 +116,7 @@ class PlaywrightRuntime:
         return self._browser is not None
 
     def storage_state_path(self) -> Path | None:
-        raw = str(self._config.get("browser_storage_state_path") or "").strip()
-        return Path(raw) if raw else None
+        return self._storage_state  # type: ignore[return-value]
 
     def _next_proxy(self) -> dict[str, str] | None:
         """Pick the next configured proxy, round-robin, for rotation across contexts."""
@@ -132,8 +185,10 @@ class PlaywrightRuntime:
         if state is None or context is None:
             return
         try:
-            state.parent.mkdir(parents=True, exist_ok=True)
+            # Cookies can be logins: owner-only before and after Playwright writes them.
+            private_file(state)
             await context.storage_state(path=str(state))
+            private_file(state)
         except Exception:
             # Storage persistence is an optimization, never a reason to fail a
             # browser operation or graceful shutdown.

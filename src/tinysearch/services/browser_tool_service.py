@@ -38,7 +38,7 @@ import weakref
 from collections.abc import Mapping
 from typing import Any
 
-from tinysearch.services.browser_runtime_service import PlaywrightRuntime
+from tinysearch.services.browser_runtime_service import PlaywrightRuntime, storage_state_for
 from tinysearch.telemetry import span_scope
 
 MINIMUM_PLAYWRIGHT_VERSION = "1.59"
@@ -269,9 +269,9 @@ def filter_snapshot(snapshot: str, find: str | None) -> str | None:
 class BrowserSession:
     """One Playwright browser, context, and page, shared across tool calls."""
 
-    def __init__(self, config: Mapping[str, Any]) -> None:
+    def __init__(self, config: Mapping[str, Any], *, principal: str | None = None) -> None:
         self._config = dict(config)
-        self._runtime = PlaywrightRuntime(config)
+        self._runtime = PlaywrightRuntime(config, storage_state=storage_state_for(config, principal))
         self._context: Any = None
         self._page: Any = None
         self._lock = asyncio.Lock()
@@ -500,13 +500,14 @@ class BrowserSession:
         return "Browser closed."
 
 
-# One interactive browser per owner. The MCP adapter passes its client
-# connection, so two callers sharing a server never see each other's page,
-# tabs or cookies; `None` is the single shared session of direct API use.
+# One interactive browser per owner and caller. The MCP adapter passes its
+# client connection and the caller's identity, so two callers sharing a
+# server never see each other's page, tabs or cookies -- not even when one
+# connection carries several callers; owner `None` is direct API use.
 # Weak keys: a connection that goes away takes its entry with it, and the
 # browser itself still closes on its idle timer.
-_sessions: weakref.WeakKeyDictionary[object, BrowserSession] = weakref.WeakKeyDictionary()
-_shared_session: BrowserSession | None = None
+_sessions: weakref.WeakKeyDictionary[object, dict[str | None, BrowserSession]] = weakref.WeakKeyDictionary()
+_shared_sessions: dict[str | None, BrowserSession] = {}
 # Sessions holding a slot, held strongly: a client can disconnect while its
 # browser is still open, and that browser must keep counting against the
 # limit, and still be closed at shutdown, until it actually shuts.
@@ -514,25 +515,24 @@ _live: set[BrowserSession] = set()
 
 
 def _all_sessions() -> list[BrowserSession]:
-    shared = [_shared_session] if _shared_session is not None else []
-    return list({*shared, *_sessions.values(), *_live})
+    owned = [s for by_caller in _sessions.values() for s in by_caller.values()]
+    return list({*_shared_sessions.values(), *owned, *_live})
 
 
-def get_session(config: Mapping[str, Any], owner: object | None = None) -> BrowserSession:
-    """The owner's session object, created on first use. Holds no slot by itself."""
-    global _shared_session
+def get_session(
+    config: Mapping[str, Any], owner: object | None = None, principal: str | None = None
+) -> BrowserSession:
+    """The owner's session for this caller, created on first use. Holds no slot by itself."""
     if not browser_backend_enabled(config):
         raise BrowserDisabledError(
             "browser tools are disabled; set browser_backend to 'playwright' to enable them"
         )
-    existing = _shared_session if owner is None else _sessions.get(owner)
+    by_caller = _shared_sessions if owner is None else _sessions.setdefault(owner, {})
+    existing = by_caller.get(principal)
     if existing is not None:
         return existing
-    session = BrowserSession(config)
-    if owner is None:
-        _shared_session = session
-    else:
-        _sessions[owner] = session
+    session = BrowserSession(config, principal=principal)
+    by_caller[principal] = session
     return session
 
 
@@ -540,7 +540,7 @@ _SLOT_POLL_SECONDS = 0.25
 
 
 async def acquire_session(
-    config: Mapping[str, Any], owner: object | None = None
+    config: Mapping[str, Any], owner: object | None = None, principal: str | None = None
 ) -> BrowserSession:
     """The owner's session, holding one of browser_max_sessions slots.
 
@@ -550,7 +550,7 @@ async def acquire_session(
     the slot happens in the same step as the check, with no await between,
     so two waiters can never both take the last one.
     """
-    session = get_session(config, owner)
+    session = get_session(config, owner, principal)
     if session.holds_slot:
         return session
     limit = int(config.get("browser_max_sessions") or 0)
@@ -569,9 +569,8 @@ async def acquire_session(
 
 async def shutdown_session() -> None:
     """Close every browser during a server's graceful shutdown."""
-    global _shared_session
     sessions = _all_sessions()
-    _shared_session = None
+    _shared_sessions.clear()
     _sessions.clear()
     _live.clear()
     for session in sessions:
@@ -583,12 +582,13 @@ async def call_tool(
     config: Mapping[str, Any],
     *,
     owner: object | None = None,
+    principal: str | None = None,
     **arguments: Any,
 ) -> str:
     """Run one browser tool and return its capped text response."""
     if name not in TOOL_NAMES:
         raise BrowserToolError(f"unknown browser tool {name!r}")
-    session = await acquire_session(config, owner)
+    session = await acquire_session(config, owner, principal)
 
     with span_scope(
         "tinysearch.browser_tool",

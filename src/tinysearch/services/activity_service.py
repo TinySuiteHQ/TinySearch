@@ -10,6 +10,10 @@ Off by default, and nothing is written while it is off. ``TINYSEARCH_ACTIVITY``:
   only by that caller. A caller is a trusted identity (see
   management_service.current_principal) or the local stdio user; activity
   from anyone else is kept as aggregate only.
+- ``content``: history, plus the text each tool call returned to the caller:
+  exactly what the model was shown, never whole pages. Its size is whatever
+  the tools' own limits (``scrape_max_tokens``, ``browser_response_char_budget``)
+  let through, so nothing is cut that the model saw.
 
 Rows older than ``TINYSEARCH_ACTIVITY_RETENTION_DAYS`` (default 7) and beyond
 ``TINYSEARCH_ACTIVITY_MAX_EVENTS`` (default 5000) are deleted as new ones
@@ -33,9 +37,13 @@ from typing import Any
 
 import platformdirs
 
+from tinysearch.paths import private_file
 from tinysearch.services.web_search_service import normalize_domain
 
-MODES = ("off", "aggregate", "history")
+MODES = ("off", "aggregate", "history", "content")
+# The modes that keep each caller's own rows (queries, URLs, and in content
+# mode what they were shown).
+DETAILED_MODES = ("history", "content")
 _PURGE_EVERY_SECONDS = 60.0
 _MAX_QUERY_CHARS = 500
 _MAX_URL_CHARS = 2000
@@ -51,7 +59,8 @@ CREATE TABLE IF NOT EXISTS events (
   latency_ms INTEGER,
   item_count INTEGER,
   error_code TEXT,
-  query TEXT
+  query TEXT,
+  content TEXT
 );
 CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
 CREATE INDEX IF NOT EXISTS events_principal ON events(principal, ts);
@@ -118,7 +127,8 @@ class ActivityStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # Queries, URLs and what the model was shown: owner-only.
+        private_file(path)
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(str(path), check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -127,6 +137,10 @@ class ActivityStore:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.executescript(_SCHEMA)
+            # A store from before content mode has no column for it.
+            columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(events)")}
+            if "content" not in columns:
+                self._conn.execute("ALTER TABLE events ADD COLUMN content TEXT")
             row = self._conn.execute("SELECT value FROM meta WHERE key = 'salt'").fetchone()
             if row is None:
                 self._salt = secrets.token_hex(16)
@@ -159,17 +173,19 @@ class ActivityStore:
         queries: Sequence[str] = (),
         discovered: Iterable[str] = (),
         fetched: Iterable[tuple[str, str]] = (),
+        shown: str | None = None,
         principal: str | None,
         mode: str,
     ) -> None:
         if mode == "off":
             return
-        # Raw queries and URLs only in history mode, and only for a caller
+        # Raw queries and URLs only in a detailed mode, and only for a caller
         # who can later read (and delete) them; everything else is counts.
-        detailed = mode == "history" and principal is not None
+        detailed = mode in DETAILED_MODES and principal is not None
         key = self.principal_key(principal) if detailed else None
         ts = _iso(_now())
         query = "\n".join(q for q in queries if q)[:_MAX_QUERY_CHARS] if detailed else None
+        content = shown if detailed and mode == "content" else None
         url_rows: list[tuple[str | None, str, str, str]] = []
         for url in discovered:
             domain = normalize_domain(url)
@@ -181,9 +197,9 @@ class ActivityStore:
                 url_rows.append((url[:_MAX_URL_CHARS] if detailed else None, domain, "fetched", result))
         with self._lock:
             cursor = self._conn.execute(
-                "INSERT INTO events (ts, principal, operation, outcome, latency_ms, item_count, error_code, query)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (ts, key, operation, outcome, latency_ms, item_count, error_code, query),
+                "INSERT INTO events (ts, principal, operation, outcome, latency_ms, item_count, error_code, query, content)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (ts, key, operation, outcome, latency_ms, item_count, error_code, query, content),
             )
             event_id = cursor.lastrowid
             self._conn.executemany(
@@ -275,12 +291,31 @@ class ActivityStore:
             params.append("%" + search.replace("!", "!!").replace("%", "!%").replace("_", "!_") + "%")
         clause = " AND ".join(where)
         rows = self._rows(
-            f"SELECT id, ts, operation, outcome, query, item_count, latency_ms, error_code"
+            f"SELECT id, ts, operation, outcome, query, item_count, latency_ms, error_code,"
+            f" LENGTH(content) AS shown_chars"
             f" FROM events WHERE {clause} ORDER BY id DESC LIMIT ? OFFSET ?",
             [*params, limit, offset],
         )
         total = self._rows(f"SELECT COUNT(*) AS n FROM events WHERE {clause}", params)[0]["n"]
         return {"rows": rows, "total": int(total or 0)}
+
+    def event_for(self, principal: str, event_id: int) -> dict[str, Any] | None:
+        """One of this caller's own events with its URLs and what it showed; None for anyone else's."""
+        key = self.principal_key(principal)
+        rows = self._rows(
+            "SELECT id, ts, operation, outcome, query, item_count, latency_ms, error_code, content"
+            " FROM events WHERE id = ? AND principal = ?",
+            (event_id, key),
+        )
+        if not rows:
+            return None
+        event = rows[0]
+        event["urls"] = self._rows(
+            "SELECT url, source, outcome FROM urls WHERE event_id = ? AND principal = ? AND url IS NOT NULL"
+            " ORDER BY rowid",
+            (event_id, key),
+        )
+        return event
 
     def urls_for(self, principal: str, *, source: str | None, search: str | None, offset: int, limit: int) -> dict[str, Any]:
         key = self.principal_key(principal)
@@ -325,7 +360,8 @@ def reset_store() -> None:
 # ---------- what an operation's result says happened ----------
 
 
-def record_search(result: Mapping[str, Any], *, principal: str | None, latency_ms: int) -> None:
+def record_search(result: Mapping[str, Any], *, principal: str | None, latency_ms: int,
+                  shown: str | None = None) -> None:
     mode = activity_mode()
     if mode == "off":
         return
@@ -339,12 +375,14 @@ def record_search(result: Mapping[str, Any], *, principal: str | None, latency_m
                          for i in items if i.get("status") == "error"), None),
         queries=[str(i.get("query") or "") for i in items],
         discovered=[str(r.get("url") or "") for i in items for r in (i.get("results") or [])],
+        shown=shown,
         principal=principal,
         mode=mode,
     )
 
 
-def record_scrape(result: Mapping[str, Any], *, principal: str | None, latency_ms: int) -> None:
+def record_scrape(result: Mapping[str, Any], *, principal: str | None, latency_ms: int,
+                  shown: str | None = None) -> None:
     mode = activity_mode()
     if mode == "off":
         return
@@ -370,13 +408,14 @@ def record_scrape(result: Mapping[str, Any], *, principal: str | None, latency_m
         error_code=error_code,
         queries=[q for q in queries if q and q != "*"],
         fetched=fetched,
+        shown=shown,
         principal=principal,
         mode=mode,
     )
 
 
 def record_browser(action: str, *, url: str | None, ok: bool, error_code: str | None,
-                   principal: str | None, latency_ms: int) -> None:
+                   principal: str | None, latency_ms: int, shown: str | None = None) -> None:
     mode = activity_mode()
     if mode == "off":
         return
@@ -387,6 +426,7 @@ def record_browser(action: str, *, url: str | None, ok: bool, error_code: str | 
         item_count=1,
         error_code=error_code,
         fetched=[(url, "ok" if ok else (error_code or "error"))] if url else [],
+        shown=shown,
         principal=principal,
         mode=mode,
     )

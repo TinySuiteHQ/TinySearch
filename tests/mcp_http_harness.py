@@ -68,8 +68,15 @@ class RunningMcpServer:
 async def mcp_session(
     url: str,
     headers: Callable[[], dict[str, str]] | dict[str, str] | None = None,
+    *,
+    as_proxy: bool = True,
 ) -> AsyncIterator[Any]:
-    """One MCP client session. ``headers`` may be a callable, read per HTTP request."""
+    """One MCP client session. ``headers`` may be a callable, read per HTTP request.
+
+    The session stands in for the trusted proxy: with ``as_proxy`` it sends the
+    configured proxy token on every request, as a real proxy must.
+    """
+    from tinysearch.services.management_service import PROXY_TOKEN_HEADER
     from mcp import ClientSession
     from mcp.client.streamable_http import streamablehttp_client
 
@@ -77,6 +84,9 @@ async def mcp_session(
         values = headers() if callable(headers) else (headers or {})
         for name, value in values.items():
             request.headers[name] = value
+        token = os.environ.get("TINYSEARCH_TRUSTED_PROXY_TOKEN")
+        if as_proxy and token:
+            request.headers[PROXY_TOKEN_HEADER] = token
 
     def factory(headers=None, timeout=None, auth=None) -> httpx.AsyncClient:  # noqa: ANN001
         return httpx.AsyncClient(

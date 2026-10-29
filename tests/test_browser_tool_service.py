@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tinysearch.config import normalize_config
 from tinysearch.services import browser_tool_service as bt
+from tinysearch.services.browser_runtime_service import PlaywrightRuntime, storage_state_for
+from tinysearch.services.management_service import LOCAL_PRINCIPAL
+
+TRUSTED = {"TINYSEARCH_TRUSTED_USER_HEADER": "X-TinySearch-User-Id",
+           "TINYSEARCH_TRUSTED_PROXY_CIDRS": "127.0.0.0/8", "TINYSEARCH_TRUSTED_PROXY_TOKEN": "p" * 32}
+SINGLE = {"TINYSEARCH_TRUSTED_USER_HEADER": "", "TINYSEARCH_TRUSTED_PROXY_CIDRS": ""}
 
 
 class ToolSurfaceTests(unittest.TestCase):
@@ -336,10 +345,10 @@ class SessionOwnershipTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.addCleanup(bt._sessions.clear)
         self.addCleanup(bt._live.clear)
-        self.addCleanup(setattr, bt, "_shared_session", None)
+        self.addCleanup(bt._shared_sessions.clear)
         bt._sessions.clear()
         bt._live.clear()
-        bt._shared_session = None
+        bt._shared_sessions.clear()
 
     def test_each_connection_gets_its_own_browser(self) -> None:
         config = normalize_config()
@@ -347,6 +356,14 @@ class SessionOwnershipTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(bt.get_session(config, alice), bt.get_session(config, alice))
         self.assertIsNot(bt.get_session(config, alice), bt.get_session(config, bob))
         self.assertIsNot(bt.get_session(config, alice), bt.get_session(config))
+
+    def test_each_caller_on_one_connection_gets_their_own_browser(self) -> None:
+        config = normalize_config()
+        connection = _Connection()
+        alice = bt.get_session(config, connection, "alice")
+        self.assertIs(alice, bt.get_session(config, connection, "alice"))
+        self.assertIsNot(alice, bt.get_session(config, connection, "bob"))
+        self.assertEqual(len(bt._all_sessions()), 2)
 
     def test_direct_api_use_keeps_one_shared_session(self) -> None:
         config = normalize_config()
@@ -431,7 +448,7 @@ class SessionOwnershipTests(unittest.IsolatedAsyncioTestCase):
         for session in sessions:
             session.close.assert_awaited_once()
         self.assertEqual(len(bt._sessions), 0)
-        self.assertIsNone(bt._shared_session)
+        self.assertEqual(bt._shared_sessions, {})
 
     async def test_call_tool_routes_to_the_callers_session(self) -> None:
         connection = _Connection()
@@ -481,6 +498,41 @@ class ToolRegistrationTests(unittest.TestCase):
             self.mcp_server, "load_tinysearch_config", return_value={"browser_backend": "playwright"}
         ):
             self.assertEqual(self.mcp_server.unregister_browser_tools_if_disabled(), [])
+
+
+
+class StorageStateTests(unittest.TestCase):
+    """Saved cookies and local storage: never loaded into another caller's browser."""
+
+    def setUp(self) -> None:
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmpdir.cleanup)
+        self.state = Path(self._tmpdir.name) / "state.json"
+        self.config = normalize_config({"browser_storage_state_path": str(self.state)})
+
+    def test_a_server_that_does_not_tell_callers_apart_keeps_the_one_file(self) -> None:
+        with patch.dict(os.environ, SINGLE):
+            for principal in (None, LOCAL_PRINCIPAL, "alice"):
+                self.assertEqual(storage_state_for(self.config, principal), self.state)
+            self.assertEqual(PlaywrightRuntime(self.config).storage_state_path(), self.state)
+
+    def test_each_caller_has_their_own_file_and_shared_browsers_have_none(self) -> None:
+        with patch.dict(os.environ, TRUSTED):
+            alice = storage_state_for(self.config, "alice")
+            bob = storage_state_for(self.config, "bob")
+            self.assertNotEqual(alice, bob)
+            self.assertEqual(alice, storage_state_for(self.config, "alice"), "stable across calls")
+            self.assertEqual(alice.parent, self.state.parent)
+            self.assertNotIn("alice", alice.name, "file names reveal no one")
+            self.assertIsNone(storage_state_for(self.config, None), "a caller with no identity")
+            self.assertEqual(storage_state_for(self.config, LOCAL_PRINCIPAL), self.state)
+            # The page fetcher's browser serves every caller, so it loads no one's cookies.
+            self.assertIsNone(PlaywrightRuntime(self.config).storage_state_path())
+            self.assertEqual(bt.BrowserSession(self.config, principal="bob")._runtime.storage_state_path(), bob)
+
+    def test_nothing_is_saved_when_no_path_is_configured(self) -> None:
+        with patch.dict(os.environ, TRUSTED):
+            self.assertIsNone(storage_state_for(normalize_config(), "alice"))
 
 
 if __name__ == "__main__":

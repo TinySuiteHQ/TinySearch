@@ -320,14 +320,15 @@ async def search_tool(
     item_count = len(items) if items is not None else (1 if query is not None else 0)
     _log(f"search called items={item_count}")
     result = await core.search(items, query=query, domains=domains, config=config)
-    _record("search", result, started)
+    from tinysearch.services.grounded_prompt_service import format_search_batch_results
+
+    shown = format_search_batch_results(items=result["items"])
+    _record("search", result, started, shown)
     _log(
         f"search returning items={result['stats']['search_item_count']} "
         f"attempts={result['stats']['backend_attempt_count']} elapsed={time.monotonic() - started:.2f}s"
     )
-    from tinysearch.services.grounded_prompt_service import format_search_batch_results
-
-    return format_search_batch_results(items=result["items"])
+    return shown
 
 
 @mcp.tool(
@@ -356,10 +357,11 @@ async def scrape_urls_tool(
         config=config,
         crawler_session=_crawler_session,
     )
-    _record("scrape", result, started)
     from tinysearch.services.grounded_prompt_service import format_url_grounded_answers
 
-    return format_url_grounded_answers(results=result["results"])
+    shown = format_url_grounded_answers(results=result["results"])
+    _record("scrape", result, started, shown)
+    return shown
 
 
 def _client_connection() -> object | None:
@@ -370,8 +372,11 @@ def _client_connection() -> object | None:
         return None
 
 
-def _record(kind: str, result: dict[str, Any], started: float) -> None:
-    """Opt-in activity (services/activity_service.py); a no-op while it is off."""
+def _record(kind: str, result: dict[str, Any], started: float, shown: str) -> None:
+    """Opt-in activity (services/activity_service.py); a no-op while it is off.
+
+    ``shown`` is the exact text returned to the caller, kept only in content mode.
+    """
     from tinysearch.services.activity_service import record_quietly
     from tinysearch.services.management_service import current_principal
 
@@ -380,6 +385,7 @@ def _record(kind: str, result: dict[str, Any], started: float) -> None:
         result,
         principal=current_principal(),
         latency_ms=round((time.monotonic() - started) * 1000),
+        shown=shown,
     )
 
 
@@ -391,11 +397,15 @@ async def _browser(name: str, **arguments: Any) -> str:
 
     _log(f"browser_{name} called")
     started = time.monotonic()
+    principal = current_principal()
     error_code = None
+    shown = None
     try:
-        return await call_tool(
-            name, load_tinysearch_config(), owner=_client_connection(), **arguments
+        # Each caller gets their own browser, and their own saved cookies.
+        shown = await call_tool(
+            name, load_tinysearch_config(), owner=_client_connection(), principal=principal, **arguments
         )
+        return shown
     except Exception as exc:
         error_code = type(exc).__name__
         raise
@@ -406,8 +416,9 @@ async def _browser(name: str, **arguments: Any) -> str:
             url=arguments.get("url") if name == "navigate" else None,
             ok=error_code is None,
             error_code=error_code,
-            principal=current_principal(),
+            principal=principal,
             latency_ms=round((time.monotonic() - started) * 1000),
+            shown=shown,
         )
 
 
@@ -593,6 +604,10 @@ def register_management() -> None:
     @mcp.resource(views("pages"), name="tinysearch-pages", mime_type="application/json")
     def management_pages(params: str) -> str:
         return json.dumps(manage.pages_view(params))
+
+    @mcp.resource(manage.ACTIVITY_ITEM_URI, name="tinysearch-activity-item", mime_type="application/json")
+    def management_activity_item(id: str) -> str:  # noqa: A002 - the template's own name
+        return json.dumps(manage.activity_item(id))
 
     if manage.history_tool_enabled():
         @mcp.tool(

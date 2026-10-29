@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -23,6 +24,7 @@ from tinysearch.servers import mcp_server
 
 HEADER = "X-TinySearch-User-Id"
 TOKEN = "k" * 32
+PROXY_TOKEN = "p" * 32
 
 
 def search_result(query: str, urls: list[str]) -> dict:
@@ -142,6 +144,46 @@ class HistoryTests(_ActivityBase):
                 manage.check_management_startup("stdio")
 
 
+class ContentTests(_ActivityBase):
+    mode = "content"
+
+    def test_keeps_exactly_what_each_caller_was_shown_and_only_for_them(self) -> None:
+        shown = "Result 1: tea\n" * 5000  # beyond any display limit: kept whole, as the model saw it
+        activity.record_search(search_result("alice q", ["https://a.example/1"]), principal="alice",
+                               latency_ms=1, shown=shown)
+        activity.record_browser("navigate", url="https://b.example/", ok=True, error_code=None,
+                                principal="bob", latency_ms=1, shown="- heading: Bob's page")
+        activity.record_search(search_result("anon q", []), principal=None, latency_ms=1, shown="anon text")
+        store = activity.get_store()
+        alice_row = store.events_for("alice", search=None, offset=0, limit=5)["rows"][0]
+        self.assertEqual(alice_row["shown_chars"], len(shown))
+        self.assertNotIn("content", alice_row, "the list never carries the text itself")
+        event = store.event_for("alice", alice_row["id"])
+        self.assertEqual(event["content"], shown)
+        self.assertEqual(event["urls"], [{"url": "https://a.example/1", "source": "discovered", "outcome": "ok"}])
+        self.assertIsNone(store.event_for("bob", alice_row["id"]), "another caller's id reads as nothing")
+        bob_id = store.events_for("bob", search=None, offset=0, limit=5)["rows"][0]["id"]
+        self.assertEqual(store.event_for("bob", bob_id)["content"], "- heading: Bob's page")
+        self.assertEqual(store._rows("SELECT COUNT(*) AS n FROM events WHERE content = 'anon text'")[0]["n"], 0)
+
+    def test_history_mode_keeps_no_content(self) -> None:
+        with patch.dict(os.environ, {"TINYSEARCH_ACTIVITY": "history"}):
+            activity.record_search(search_result("q", []), principal="alice", latency_ms=1, shown="text")
+        self.assertEqual(activity.get_store()._rows("SELECT content FROM events"), [{"content": None}])
+
+    def test_a_store_from_before_content_mode_gains_the_column(self) -> None:
+        activity.reset_store()
+        conn = sqlite3.connect(self.db)
+        conn.executescript(
+            "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+            "CREATE TABLE events (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, principal TEXT, operation TEXT NOT NULL,"
+            " outcome TEXT NOT NULL, latency_ms INTEGER, item_count INTEGER, error_code TEXT, query TEXT);"
+        )
+        conn.close()
+        activity.record_search(search_result("q", []), principal="alice", latency_ms=1, shown="kept")
+        self.assertEqual(activity.get_store()._rows("SELECT content FROM events"), [{"content": "kept"}])
+
+
 class StartupTests(unittest.TestCase):
     def test_http_management_needs_a_token_or_a_trusted_identity(self) -> None:
         base = {"TINYSEARCH_MANAGEMENT": "on", "TINYSEARCH_MANAGEMENT_TOKEN": "",
@@ -155,6 +197,17 @@ class StartupTests(unittest.TestCase):
         with patch.dict(os.environ, {**base, "TINYSEARCH_TRUSTED_USER_HEADER": HEADER}):
             with self.assertRaises(ValueError):  # a header alone is never believed
                 manage.check_management_startup("streamable-http")
+        trusted = {**base, "TINYSEARCH_TRUSTED_USER_HEADER": HEADER, "TINYSEARCH_TRUSTED_PROXY_CIDRS": "10.0.0.0/8"}
+        for token in ("", "short"):
+            with patch.dict(os.environ, {**trusted, "TINYSEARCH_TRUSTED_PROXY_TOKEN": token}):
+                with self.assertRaisesRegex(ValueError, "TINYSEARCH_TRUSTED_PROXY_TOKEN"):  # nor an address alone
+                    manage.check_management_startup("streamable-http")
+        with patch.dict(os.environ, {**trusted, "TINYSEARCH_TRUSTED_PROXY_TOKEN": PROXY_TOKEN,
+                                     "TINYSEARCH_TRUSTED_USER_HEADER": manage.PROXY_TOKEN_HEADER}):
+            with self.assertRaises(ValueError):
+                manage.check_management_startup("streamable-http")
+        with patch.dict(os.environ, {**trusted, "TINYSEARCH_TRUSTED_PROXY_TOKEN": PROXY_TOKEN}):
+            manage.check_management_startup("streamable-http")
 
     def test_an_http_message_without_its_request_is_nobody(self) -> None:
         # If the SDK ever stops attaching the HTTP request, a caller must not
@@ -169,15 +222,30 @@ class StartupTests(unittest.TestCase):
             self.assertEqual(manage.current_principal(), manage.LOCAL_PRINCIPAL)
 
     def test_identity_is_believed_only_from_trusted_peers_and_only_once(self) -> None:
-        env = {"TINYSEARCH_TRUSTED_USER_HEADER": HEADER, "TINYSEARCH_TRUSTED_PROXY_CIDRS": "10.0.0.0/8"}
+        env = {"TINYSEARCH_TRUSTED_USER_HEADER": HEADER, "TINYSEARCH_TRUSTED_PROXY_CIDRS": "10.0.0.0/8",
+               "TINYSEARCH_TRUSTED_PROXY_TOKEN": PROXY_TOKEN}
         header = HEADER.lower().encode()
+        proxy = (manage.PROXY_TOKEN_HEADER.lower().encode(), PROXY_TOKEN.encode())
         with patch.dict(os.environ, env):
-            ok = {"client": ("10.1.2.3", 1), "headers": [(header, b"alice")]}
+            ok = {"client": ("10.1.2.3", 1), "headers": [proxy, (header, b"alice")]}
             self.assertEqual(manage.principal_from_scope(ok), "alice")
             self.assertIsNone(manage.principal_from_scope({**ok, "client": ("192.168.1.5", 1)}))
-            self.assertIsNone(manage.principal_from_scope({**ok, "headers": [(header, b"a"), (header, b"b")]}))
-            self.assertIsNone(manage.principal_from_scope({**ok, "headers": [(header, b"a\nb")]}))
-            self.assertIsNone(manage.principal_from_scope({**ok, "headers": []}))
+            self.assertIsNone(manage.principal_from_scope({**ok, "headers": [proxy, (header, b"a"), (header, b"b")]}))
+            self.assertIsNone(manage.principal_from_scope({**ok, "headers": [proxy, (header, b"a\nb")]}))
+            self.assertIsNone(manage.principal_from_scope({**ok, "headers": [proxy]}))
+
+    def test_a_trusted_peer_without_the_proxy_token_is_not_the_proxy(self) -> None:
+        env = {"TINYSEARCH_TRUSTED_USER_HEADER": HEADER, "TINYSEARCH_TRUSTED_PROXY_CIDRS": "127.0.0.0/8",
+               "TINYSEARCH_TRUSTED_PROXY_TOKEN": PROXY_TOKEN}
+        alice = (HEADER.lower().encode(), b"alice")
+        token_header = manage.PROXY_TOKEN_HEADER.lower().encode()
+        with patch.dict(os.environ, env):
+            for headers in ([alice],
+                            [(token_header, b"q" * 32), alice],
+                            [(token_header, PROXY_TOKEN[:-1].encode()), alice],
+                            [(token_header, PROXY_TOKEN.encode()), (token_header, PROXY_TOKEN.encode()), alice]):
+                with self.subTest(headers=headers):
+                    self.assertIsNone(manage.principal_from_scope({"client": ("127.0.0.1", 1), "headers": headers}))
 
 
 class McpManagementTests(unittest.IsolatedAsyncioTestCase):
@@ -192,6 +260,7 @@ class McpManagementTests(unittest.IsolatedAsyncioTestCase):
             "TINYSEARCH_MANAGEMENT_TOKEN": TOKEN,
             "TINYSEARCH_TRUSTED_USER_HEADER": HEADER,
             "TINYSEARCH_TRUSTED_PROXY_CIDRS": "127.0.0.0/8",
+            "TINYSEARCH_TRUSTED_PROXY_TOKEN": PROXY_TOKEN,
         })
         env.start()
         self.addCleanup(env.stop)
@@ -274,6 +343,37 @@ class McpManagementTests(unittest.IsolatedAsyncioTestCase):
                 async with mcp_session(server.url, {HEADER: "alice"}) as session:
                     with self.assertRaises(Exception):
                         await read(session, view("activity"))
+
+    async def test_a_local_caller_without_the_proxy_token_is_nobody(self) -> None:
+        # 127.0.0.0/8 is trusted here, so any local program can reach the port:
+        # without the token it neither reads alice's history nor is recorded as her.
+        with RunningMcpServer() as server:
+            await self._search_as(server, "alice")
+            async with mcp_session(server.url, {HEADER: "alice"}, as_proxy=False) as session:
+                with self.assertRaises(Exception):
+                    await read(session, view("activity"))
+                await session.call_tool("search", {"items": [{"query": "forged topic"}]})
+            async with mcp_session(server.url, {HEADER: "alice"}) as session:
+                mine = await read(session, view("activity"))
+        self.assertEqual({r["query"] for r in mine["rows"] if r["query"]}, {"alice private topic"})
+
+    async def test_content_mode_shows_each_caller_exactly_what_the_model_saw(self) -> None:
+        with patch.dict(os.environ, {"TINYSEARCH_ACTIVITY": "content"}), RunningMcpServer() as server:
+            async with mcp_session(server.url, {HEADER: "alice"}) as session:
+                returned = await session.call_tool("search", {"items": [{"query": "alice private topic"}]})
+                rows = (await read(session, view("activity")))["rows"]
+                manifest = await read(session, manage.MANIFEST_URI)
+                item = await read(session, manage.ACTIVITY_ITEM_URI.format(id=rows[0]["id"]))
+            async with mcp_session(server.url, {HEADER: "bob"}) as session:
+                with self.assertRaises(Exception):  # alice's id is not bob's to read
+                    await read(session, manage.ACTIVITY_ITEM_URI.format(id=rows[0]["id"]))
+
+        fields = {f["label"]: f["value"] for f in item["fields"]}
+        self.assertEqual(fields["What the model was shown"], returned.content[0].text)
+        self.assertIn("https://alice.example/page", fields["URLs"])
+        activity_view = next(v for v in manifest["views"] if v["id"] == "activity")
+        self.assertEqual(activity_view["detail"]["resource"], manage.ACTIVITY_ITEM_URI)
+        self.assertIn("shown_chars", [c["key"] for c in activity_view["columns"]])
 
     async def test_clear_tool_deletes_only_the_callers_history(self) -> None:
         with RunningMcpServer() as server:
