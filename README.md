@@ -95,6 +95,7 @@ The full reference lives at **[tinysuite.dev/docs/tinysearch](https://tinysuite.
 | [Installation](https://tinysuite.dev/docs/tinysearch/#choose-an-installation) | Python, Docker with SearXNG, from source |
 | [MCP tools](https://tinysuite.dev/docs/tinysearch/#mcp-tools) | Every tool, its parameters and response contract |
 | [Output formats](https://tinysuite.dev/docs/tinysearch/#output-formats) | What search and scrape results look like |
+| [Activity and management](https://tinysuite.dev/docs/tinysearch/#management) | Activity recording and the management views |
 | [Configuration](https://tinysuite.dev/docs/tinysearch/#configuration) | Every setting, environment variables, Docker overrides |
 | [OpenTelemetry](https://tinysuite.dev/docs/tinysearch/#opentelemetry) | Traces and metrics |
 | [Troubleshooting](https://tinysuite.dev/docs/tinysearch/#troubleshooting) | Installation checks and common failures |
