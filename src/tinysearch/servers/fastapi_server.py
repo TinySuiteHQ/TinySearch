@@ -21,9 +21,9 @@ from tinysearch.telemetry import configure_from_environment, shutdown as shutdow
 
 
 # Settings that let a caller reach outside the HTTP surface: an external
-# browser endpoint, a cookie/storage file, and the switch that launches or
-# attaches to Playwright. All are operator decisions made at startup, never
-# over the API.
+# browser endpoint, a cookie/storage file, the switch that launches or
+# attaches to Playwright, and the fallback fetch service. All are operator
+# decisions made at startup, never over the API.
 _OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({
     "browser_cdp_url",
     "browser_backend",
@@ -32,6 +32,7 @@ _OPERATOR_MANAGED_CONFIG_FIELDS = frozenset({
     "browser_proxy_username",
     "browser_proxy_password",
     "browser_proxy_bypass",
+    "scrape_fallback_fetcher_url",
 })
 
 
@@ -173,7 +174,14 @@ async def get_config_endpoint() -> dict[str, Any]:
     return {
         key: (
             "***"
-            if (key in ("browser_cdp_url", "browser_storage_state_path") and value)
+            if (
+                key in (
+                    "browser_cdp_url",
+                    "browser_storage_state_path",
+                    "scrape_fallback_fetcher_url",
+                )
+                and value
+            )
             or any(marker in key.lower() for marker in ("secret", "token", "api_key"))
             else value
         )

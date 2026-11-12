@@ -53,6 +53,11 @@ async def _route_scrape_request(route: Any) -> None:
     await route.continue_()
 
 
+async def _abort_every_request(route: Any) -> None:
+    """Keep supplied HTML offline: it renders as-is, fetching nothing."""
+    await route.abort()
+
+
 _ARIA_REF_OR_CURSOR_RE = re.compile(r"\s*\[(?:ref=[^\]]+|cursor=[^\]]+)\]")
 
 
@@ -123,6 +128,34 @@ class DirectPlaywrightCrawler:
             }
         finally:
             await context.close()
+
+    async def render_html(self, *, html: str) -> dict[str, Any]:
+        """Extract text from HTML fetched elsewhere, the same way `arun` does.
+
+        The HTML came from an outside service, so it renders with JavaScript
+        off and every network request aborted: nothing in it runs or loads.
+        """
+        context = await self._runtime.new_context(java_script_enabled=False)
+        try:
+            await context.route("**/*", _abort_every_request)
+            page = await context.new_page()
+            await page.set_content(html, wait_until="domcontentloaded")
+            text = await _accessibility_text(page)
+            try:
+                title = await page.title()
+            except Exception:
+                title = ""
+            return {"markdown_raw": text, "title": title}
+        finally:
+            await context.close()
+
+
+async def render_html_text(html: str, *, crawler: Any | None = None) -> dict[str, Any]:
+    """Render supplied HTML offline on the shared crawler, or a short-lived one."""
+    if crawler is not None:
+        return await crawler.render_html(html=html)
+    async with create_browser_crawler() as owned_crawler:
+        return await owned_crawler.render_html(html=html)
 
 
 def create_browser_crawler(config: Mapping[str, Any] | None = None) -> DirectPlaywrightCrawler:

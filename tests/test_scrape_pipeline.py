@@ -11,6 +11,7 @@ from tinysearch.results import public_chunk, result_envelope
 from tinysearch.services.scrape_service import (
     DEFAULT_SCRAPE_MAX_TOKENS,
     EmptyContentError,
+    FetchUnavailableError,
     FetchFailedError,
     FetchTimeoutError,
     SCRAPE_ERROR_MAP,
@@ -811,6 +812,155 @@ class ScrapeUrlDocumentPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result.metadata)
 
 
+_LONG_TEXT = " ".join(
+    f"Sentence {i} of the article covers one more detail about the topic."
+    for i in range(1, 6)
+)
+
+
+async def _fake_html_long(*, url, user_query):
+    return {
+        "final_url": url,
+        "html": "<html><head><title>Long Article</title></head><body></body></html>",
+        "markdown_raw": _LONG_TEXT,
+        "metadata": {"title": "Long Article", "status": 200},
+    }
+
+
+async def _fake_html_holding_page(*, url, user_query):
+    return {
+        "final_url": url,
+        "html": "<html><head><title>One moment</title></head><body></body></html>",
+        "markdown_raw": '- heading "One moment" [level=1]\n- paragraph: Loading the page.',
+        "metadata": {"title": "One moment", "status": 200},
+    }
+
+
+async def _fake_html_forbidden(*, url, user_query):
+    return {
+        "final_url": url,
+        "html": "<html><head><title>403 Forbidden</title></head><body></body></html>",
+        "markdown_raw": "403 Forbidden",
+        "metadata": {"title": "403 Forbidden", "status": 403},
+    }
+
+
+def _fallback_returning(page: dict | None = None, *, error: Exception | None = None):
+    calls: list[dict] = []
+
+    async def _fallback(*, url, crawler):
+        calls.append({"url": url, "crawler": crawler})
+        if error is not None:
+            raise error
+        return page if page is not None else {
+            "final_url": url,
+            "html": "<html><head><title>Real Article</title></head><body></body></html>",
+            "markdown_raw": _LONG_TEXT + " Python asyncio guide explains async tasks via fallback.",
+            "metadata": {"title": "Real Article", "status": 200},
+        }
+
+    _fallback.calls = calls
+    return _fallback
+
+
+class ScrapeFallbackFetcherTests(unittest.IsolatedAsyncioTestCase):
+    async def _scrape(self, crawl_fn, fallback_fn=None, **config):
+        with patch(
+            "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_fake_safe_url
+        ):
+            return await scrape_url(
+                "https://example.com/x",
+                "*",
+                config=_config(**config),
+                tokenizer_name=TOKENIZER,
+                crawl_fn=crawl_fn,
+                fallback_fn=fallback_fn,
+            )
+
+    async def test_forbidden_page_uses_fallback_content(self) -> None:
+        fallback = _fallback_returning()
+        result = await self._scrape(_fake_html_forbidden, fallback)
+        self.assertEqual(len(fallback.calls), 1)
+        self.assertEqual(fallback.calls[0]["url"], "https://example.com/x")
+        self.assertIn("via fallback", result.chunks[0]["text"])
+        self.assertNotIn("403 Forbidden", result.chunks[0]["text"])
+        self.assertEqual(result.title, "Real Article")
+
+    async def test_forbidden_page_without_fallback_raises_fetch_unavailable(self) -> None:
+        with self.assertRaises(FetchUnavailableError):
+            await self._scrape(_fake_html_forbidden)
+
+    async def test_failed_fallback_raises_fetch_unavailable(self) -> None:
+        fallback = _fallback_returning(error=RuntimeError("service down"))
+        with self.assertRaises(FetchUnavailableError):
+            await self._scrape(_fake_html_forbidden, fallback)
+        self.assertEqual(len(fallback.calls), 1)
+
+    async def test_fallback_that_is_also_forbidden_raises_fetch_unavailable(self) -> None:
+        forbidden_again = await _fake_html_forbidden(url="https://example.com/x", user_query=None)
+        with self.assertRaises(FetchUnavailableError):
+            await self._scrape(_fake_html_forbidden, _fallback_returning(forbidden_again))
+
+    async def test_empty_page_uses_fallback_content(self) -> None:
+        fallback = _fallback_returning()
+        result = await self._scrape(_fake_html_empty, fallback)
+        self.assertIn("via fallback", result.chunks[0]["text"])
+
+    async def test_empty_page_with_failed_fallback_stays_empty_content(self) -> None:
+        with self.assertRaises(EmptyContentError):
+            await self._scrape(
+                _fake_html_empty, _fallback_returning(error=RuntimeError("down"))
+            )
+
+    async def test_readable_page_never_calls_fallback(self) -> None:
+        fallback = _fallback_returning()
+        await self._scrape(_fake_html_long, fallback)
+        self.assertEqual(fallback.calls, [])
+
+    async def test_short_page_uses_fallback_content(self) -> None:
+        fallback = _fallback_returning()
+        result = await self._scrape(_fake_html_holding_page, fallback)
+        self.assertEqual(len(fallback.calls), 1)
+        self.assertIn("via fallback", result.chunks[0]["text"])
+
+    async def test_short_page_keeps_its_own_text_when_fallback_fails(self) -> None:
+        result = await self._scrape(
+            _fake_html_holding_page, _fallback_returning(error=RuntimeError("down"))
+        )
+        self.assertIn("Loading the page", result.chunks[0]["text"])
+
+    async def test_short_page_keeps_its_own_text_when_fallback_is_also_short(self) -> None:
+        short = await _fake_html_holding_page(url="https://example.com/x", user_query=None)
+        short["markdown_raw"] = "Still loading."
+        result = await self._scrape(_fake_html_holding_page, _fallback_returning(short))
+        self.assertIn("Loading the page", result.chunks[0]["text"])
+
+    async def test_min_words_zero_only_triggers_on_empty_pages(self) -> None:
+        fallback = _fallback_returning()
+        await self._scrape(_fake_html_holding_page, fallback, scrape_fallback_min_words=0)
+        self.assertEqual(fallback.calls, [])
+
+    async def test_fallback_final_url_is_safety_checked(self) -> None:
+        page = await _fallback_returning()(url="https://example.com/x", crawler=None)
+        page["final_url"] = "https://blocked.example/x"
+
+        def _safe(url, blocked_domains):
+            if "blocked.example" in url:
+                raise BlockedUrlError("redirect blocked")
+            return url
+
+        with patch("tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=_safe):
+            with self.assertRaises(BlockedUrlError):
+                await scrape_url(
+                    "https://example.com/x",
+                    "*",
+                    config=_config(),
+                    tokenizer_name=TOKENIZER,
+                    crawl_fn=_fake_html_forbidden,
+                    fallback_fn=_fallback_returning(page),
+                )
+
+
 class ScrapeErrorMapTests(unittest.TestCase):
     def test_maps_all_known_errors(self) -> None:
         codes = {value[0] for value in SCRAPE_ERROR_MAP.values()}
@@ -821,6 +971,7 @@ class ScrapeErrorMapTests(unittest.TestCase):
                 "blocked_url",
                 "fetch_timeout",
                 "fetch_failed",
+                "fetch_unavailable",
                 "unsupported_document",
                 "empty_content",
             },

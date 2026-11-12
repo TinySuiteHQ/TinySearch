@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from functools import partial
 from typing import Any
@@ -25,6 +26,7 @@ from tinysearch.services.scrape_service import (
     DEFAULT_SCRAPE_MAX_TOKENS,
     DocumentExtractFn,
     EmptyContentError,
+    FetchUnavailableError,
     HtmlCrawlFn,
     ScrapeResult,
     UnsupportedDocumentError,
@@ -36,6 +38,13 @@ from tinysearch.services.scrape_service import (
     utc_iso8601_z,
 )
 from tinysearch.services.token_counter_service import decode_tokens, encode_tokens
+from tinysearch.services.fallback_fetcher_service import (
+    FALLBACK_TRIGGER_STATUSES,
+    FallbackFetchFn,
+    fetch_page_via_fallback,
+    page_needs_fallback,
+    page_status,
+)
 from tinysearch.services.site_crawl_service import (
     extract_document_text,
     fetch_html_for_query,
@@ -146,6 +155,47 @@ def _links_under_budget(
     return selected, total
 
 
+# Margin beyond the fetch service's own deadline for the offline render of
+# its HTML, so a hung render cannot hold the scrape open indefinitely.
+_FALLBACK_RENDER_GRACE_SECONDS = 15.0
+
+
+async def _fallback_page_or_none(
+    url: str,
+    *,
+    resolved: Mapping[str, Any],
+    fallback_fn: FallbackFetchFn | None,
+    crawler: Any | None,
+) -> dict[str, Any] | None:
+    """Try the operator's fallback fetch service; None when it is off or fails."""
+    fetcher_url = str(resolved.get("scrape_fallback_fetcher_url") or "")
+    if fallback_fn is None and not fetcher_url:
+        return None
+    timeout_seconds = float(resolved["scrape_fallback_fetcher_timeout_seconds"])
+    if fallback_fn is None:
+        fallback_fn = partial(
+            fetch_page_via_fallback,
+            fetcher_url=fetcher_url,
+            timeout_seconds=timeout_seconds,
+        )
+    with span_scope(
+        "tinysearch.fetch.fallback",
+        attributes={"tinysearch.document.type": "html"},
+        operation="fetch_fallback",
+    ) as fallback_telemetry:
+        try:
+            async with asyncio.timeout(timeout_seconds + _FALLBACK_RENDER_GRACE_SECONDS):
+                page = await fallback_fn(url=url, crawler=crawler)
+        except Exception as exc:  # noqa: BLE001 - a failed fallback is an outcome, not a crash
+            fallback_telemetry.fail(exc)
+            return None
+        if page_needs_fallback(page, min_words=int(resolved["scrape_fallback_min_words"])):
+            fallback_telemetry.complete(outcome="unreadable")
+            return None
+        fallback_telemetry.complete()
+        return page
+
+
 async def run_scrape_pipeline(
     url: str,
     query: str | None,
@@ -157,6 +207,7 @@ async def run_scrape_pipeline(
     crawl_fn: HtmlCrawlFn | None = None,
     document_fn: DocumentExtractFn | None = None,
     crawler: Any | None = None,
+    fallback_fn: FallbackFetchFn | None = None,
 ) -> ScrapeResult:
     """Extract a URL in page order, or rank chunks only for a supplied query.
 
@@ -231,6 +282,17 @@ async def run_scrape_pipeline(
                 crawler=crawler,
             )
             fetch_telemetry.complete()
+        if page_needs_fallback(page, min_words=int(resolved["scrape_fallback_min_words"])):
+            fallback_page = await _fallback_page_or_none(
+                safe_url, resolved=resolved, fallback_fn=fallback_fn, crawler=crawler
+            )
+            if fallback_page is not None:
+                page = fallback_page
+            elif page_status(page) in FALLBACK_TRIGGER_STATUSES:
+                raise FetchUnavailableError(
+                    f"{safe_url} answered HTTP {page_status(page)}; "
+                    "no readable copy of the page was available"
+                )
         final_url = str(page.get("final_url") or safe_url)
         html = str(page.get("html") or "")
         crawl_metadata = page.get("metadata") or {}

@@ -46,11 +46,20 @@ class EmptyContentError(ScrapeError):
     """The page produced no usable text after extraction and chunking."""
 
 
+class FetchUnavailableError(ScrapeError):
+    """The page answered HTTP 403, 429, or 503 and no readable copy was fetched.
+
+    Raised instead of returning the error page's text, which is never
+    evidence about the requested page.
+    """
+
+
 SCRAPE_ERROR_MAP: dict[type, tuple[str, int]] = {
     InvalidUrlError: ("invalid_url", 400),
     BlockedUrlError: ("blocked_url", 403),
     FetchTimeoutError: ("fetch_timeout", 504),
     FetchFailedError: ("fetch_failed", 502),
+    FetchUnavailableError: ("fetch_unavailable", 502),
     UnsupportedDocumentError: ("unsupported_document", 415),
     EmptyContentError: ("empty_content", 422),
 }

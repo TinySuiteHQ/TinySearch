@@ -159,12 +159,19 @@ class PlaywrightRuntime:
             self._browser = await self._playwright.chromium.launch(headless=True)
             self._owns_browser = True
 
-    async def new_context(self, *, apply_action_timeout: bool = False) -> Any:
+    async def new_context(
+        self,
+        *,
+        apply_action_timeout: bool = False,
+        java_script_enabled: bool = True,
+    ) -> Any:
         await self.start()
         if self._browser is None:
             raise RuntimeError("Playwright browser failed to start")
 
         options: dict[str, Any] = {"locale": "en-US"}
+        if not java_script_enabled:
+            options["java_script_enabled"] = False
         state = self.storage_state_path()
         if state is not None and state.is_file():
             options["storage_state"] = str(state)

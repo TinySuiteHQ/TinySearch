@@ -29,6 +29,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scrape_max_tokens": 2000,
     "scrape_max_links": 8,
     "scrape_max_link_tokens": 500,
+    "scrape_fallback_fetcher_url": "",
+    "scrape_fallback_fetcher_timeout_seconds": 60.0,
+    "scrape_fallback_min_words": 30,
     "search_top_k": 10,
     "chunk_rrf_cutoff": 0.0,
     "chunk_dense_weight": 0.5,
@@ -81,6 +84,7 @@ _INT_FIELDS = {
     "scrape_max_tokens",
     "scrape_max_links",
     "scrape_max_link_tokens",
+    "scrape_fallback_min_words",
     "search_top_k",
     "max_concurrent_embedding_calls",
     "embedding_timeout_retries",
@@ -101,6 +105,7 @@ _FLOAT_FIELDS = {
     "browser_idle_shutdown_seconds",
     "browser_action_timeout_seconds",
     "browser_session_wait_seconds",
+    "scrape_fallback_fetcher_timeout_seconds",
 }
 
 
@@ -140,6 +145,7 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "searxng_timeout_seconds",
         "browser_idle_shutdown_seconds",
         "browser_action_timeout_seconds",
+        "scrape_fallback_fetcher_timeout_seconds",
     ):
         if config[key] <= 0:
             raise ValueError(f"tinysearch config {key} must be positive")
@@ -152,6 +158,11 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
             raise ValueError(
                 f"tinysearch config {key} must be zero (unlimited) or positive"
             )
+    if config["scrape_fallback_min_words"] < 0:
+        raise ValueError(
+            "tinysearch config scrape_fallback_min_words must be zero "
+            "(only empty pages) or positive"
+        )
     raw_timeout = config.get("pipeline_timeout_seconds")
     config["pipeline_timeout_seconds"] = (
         float(raw_timeout) if raw_timeout is not None else None
@@ -170,6 +181,7 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         "browser_proxy_username",
         "browser_proxy_password",
         "browser_proxy_bypass",
+        "scrape_fallback_fetcher_url",
     ):
         if config.get(key) is not None:
             config[key] = str(config[key])
@@ -194,6 +206,19 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
                 "tinysearch config browser_cdp_url must include a hostname"
             )
     config["browser_cdp_url"] = browser_cdp_url
+
+    fallback_fetcher_url = config["scrape_fallback_fetcher_url"].strip()
+    if fallback_fetcher_url:
+        parsed_fetcher_url = urlsplit(fallback_fetcher_url)
+        if parsed_fetcher_url.scheme.lower() not in {"http", "https"}:
+            raise ValueError(
+                "tinysearch config scrape_fallback_fetcher_url must use http or https"
+            )
+        if not parsed_fetcher_url.hostname:
+            raise ValueError(
+                "tinysearch config scrape_fallback_fetcher_url must include a hostname"
+            )
+    config["scrape_fallback_fetcher_url"] = fallback_fetcher_url
 
     proxy_servers = [
         entry.strip()
