@@ -83,7 +83,7 @@ uvx --from "tinysuite-search[server]" tinysearch setup
   <img src="assets/demo_terminal_prompt.gif" alt="TinySearch CLI setup and first run in a terminal" width="780" />
 </p>
 
-From Python, `pip install tinysuite-search` and call `search` and `scrape_urls` directly ([docs/python-and-http.md](docs/python-and-http.md)). The recommended flow is the same everywhere: `search` for lightweight discovery, then `scrape_urls` for the pages worth reading.
+From Python, `pip install tinysuite-search` and call `search` and `scrape_urls` directly ([Python library](https://tinysuite.dev/docs/tinysearch/#python-library)). The recommended flow is the same everywhere: `search` for lightweight discovery, then `scrape_urls` for the pages worth reading.
 
 ## Documentation
 
@@ -92,15 +92,16 @@ The full reference lives at **[tinysuite.dev/docs/tinysearch](https://tinysuite.
 | Topic | Covers |
 | --- | --- |
 | [Quick start](https://tinysuite.dev/docs/tinysearch/#quick-start-mcp-over-stdio) | MCP over stdio |
-| [Installation](https://tinysuite.dev/docs/tinysearch/#choose-an-installation) | Python, Docker with SearXNG, from source |
-| [MCP tools](https://tinysuite.dev/docs/tinysearch/#mcp-tools) | Every tool, its parameters and response contract |
-| [Output formats](https://tinysuite.dev/docs/tinysearch/#output-formats) | What search and scrape results look like |
+| [Installation](https://tinysuite.dev/docs/tinysearch/#choose-an-installation) | Python, Docker with SearXNG, from source and entrypoints |
+| [MCP tools](https://tinysuite.dev/docs/tinysearch/#mcp-tools) | Every tool, its parameters and response contract, including the browser tools |
+| [What your agent gets](https://tinysuite.dev/docs/tinysearch/#what-your-agent-gets) | The recommended flow, retrieval rather than summarization, when not to use it |
+| [Output formats](https://tinysuite.dev/docs/tinysearch/#output-formats) | What search and scrape results look like, the FastAPI endpoints |
 | [Activity and management](https://tinysuite.dev/docs/tinysearch/#management) | Activity recording and the management views |
-| [Configuration](https://tinysuite.dev/docs/tinysearch/#configuration) | Every setting, environment variables, Docker overrides |
 | [OpenTelemetry](https://tinysuite.dev/docs/tinysearch/#opentelemetry) | Traces and metrics |
+| [Configuration](https://tinysuite.dev/docs/tinysearch/#configuration) | Every setting and environment variable: search backends, browser, CDP, proxies, the fallback fetcher |
 | [Troubleshooting](https://tinysuite.dev/docs/tinysearch/#troubleshooting) | Installation checks and common failures |
 
-In this repository: [docs/how-it-works.md](docs/how-it-works.md) is the pipeline, the tools and what your agent gets back, [docs/token-savings.md](docs/token-savings.md) is the benchmark and how to rerun it, [docs/python-and-http.md](docs/python-and-http.md) covers the Python library, the FastAPI app and every entrypoint, [docs/search-backends.md](docs/search-backends.md) the search backends and their fallbacks, [docs/browser-automation.md](docs/browser-automation.md) the browser tools, sessions, an external browser over CDP and proxies, [docs/fallback-fetcher.md](docs/fallback-fetcher.md) the optional second fetch path for pages the scraper can't read, [docs/activity-and-management.md](docs/activity-and-management.md) activity recording and the management views, and [docs/telemetry.md](docs/telemetry.md) OpenTelemetry export. [configs/tinysearch_config.json](configs/tinysearch_config.json) is an annotated example configuration.
+In this repository: [docs/token-savings.md](docs/token-savings.md) is the benchmark and the script to rerun it, [docs/fallback-fetcher.md](docs/fallback-fetcher.md) is the full contract a fallback fetch service implements, and [configs/tinysearch_config.json](configs/tinysearch_config.json) is an annotated example configuration.
 
 ## Development
 
