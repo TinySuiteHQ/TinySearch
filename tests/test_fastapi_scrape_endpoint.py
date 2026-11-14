@@ -3,7 +3,10 @@ from __future__ import annotations
 import unittest
 from unittest.mock import AsyncMock, patch
 
+from fastapi import HTTPException
 from pydantic import ValidationError
+
+from tinysearch.config import TinySearchConfig
 
 from tinysearch.servers.fastapi_server import (
     ScrapeBatchRequest,
@@ -25,11 +28,11 @@ class ScrapeUrlsRequestValidationTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ScrapeBatchRequest(items=[{"url": "ftp://example.com/x", "query": "q"}])
 
-    def test_limits_items_to_one_through_five(self) -> None:
+    def test_requires_at_least_one_item_and_leaves_the_cap_to_config(self) -> None:
         with self.assertRaises(ValidationError):
             ScrapeBatchRequest(items=[])
-        with self.assertRaises(ValidationError):
-            ScrapeBatchRequest(items=[{"url": f"https://{index}.example"} for index in range(6)])
+        request = ScrapeBatchRequest(items=[{"url": f"https://{index}.example"} for index in range(6)])
+        self.assertEqual(len(request.items), 6)
 
     def test_rejects_removed_output_format(self) -> None:
         with self.assertRaises(ValidationError):
@@ -45,6 +48,29 @@ class ScrapeUrlsRequestValidationTests(unittest.TestCase):
 
 
 class ScrapeEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_more_items_than_scrape_max_items(self) -> None:
+        batch_mock = AsyncMock()
+        request = ScrapeBatchRequest(items=[{"url": f"https://{index}.example"} for index in range(6)])
+        with patch("tinysearch.core.scrape_urls", batch_mock), patch(
+            "tinysearch.servers.fastapi_server.load_tinysearch_config",
+            return_value=TinySearchConfig(),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                await scrape_endpoint(request)
+        self.assertEqual(raised.exception.status_code, 422)
+        self.assertEqual(raised.exception.detail["code"], "too_many_items")
+        batch_mock.assert_not_awaited()
+
+    async def test_accepts_a_larger_batch_when_scrape_max_items_allows_it(self) -> None:
+        batch_mock = AsyncMock(return_value={"operation": "scrape_batch", "status": "ok", "results": []})
+        request = ScrapeBatchRequest(items=[{"url": f"https://{index}.example"} for index in range(6)])
+        with patch("tinysearch.core.scrape_urls", batch_mock), patch(
+            "tinysearch.servers.fastapi_server.load_tinysearch_config",
+            return_value=TinySearchConfig(scrape_max_items=8),
+        ), patch("tinysearch.servers.fastapi_server.record_quietly"):
+            await scrape_endpoint(request)
+        self.assertEqual(len(batch_mock.await_args.args[0]), 6)
+
     async def test_batch_passes_independent_optional_queries_to_core(self) -> None:
         batch_mock = AsyncMock(return_value={"operation": "scrape_batch", "status": "ok", "results": []})
         crawler_session = object()

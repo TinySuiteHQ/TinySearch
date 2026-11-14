@@ -26,6 +26,8 @@ from tinysearch.services.web_search_service import (
 DEFAULT_CONFIG: dict[str, Any] = {
     "search_max_results": 10,
     "search_max_concurrent_items": 3,
+    "scrape_max_items": 5,
+    "scrape_max_concurrent_items": 5,
     "scrape_max_tokens": 2000,
     "scrape_max_links": 8,
     "scrape_max_link_tokens": 500,
@@ -81,6 +83,8 @@ SUPPORTED_BROWSER_BACKENDS = ("off", "playwright")
 _INT_FIELDS = {
     "search_max_results",
     "search_max_concurrent_items",
+    "scrape_max_items",
+    "scrape_max_concurrent_items",
     "scrape_max_tokens",
     "scrape_max_links",
     "scrape_max_link_tokens",
@@ -134,6 +138,8 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         config[key] = int(config[key])
     for key in (
         "search_max_concurrent_items",
+        "scrape_max_items",
+        "scrape_max_concurrent_items",
         "scrape_max_link_tokens",
         "browser_max_sessions",
     ):

@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from contextlib import asynccontextmanager
+from collections.abc import Mapping
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
@@ -159,7 +160,16 @@ async def _run_streamable_http_combined_async() -> None:
     await uvicorn.Server(config).serve()
 
 
-MCP_INSTRUCTIONS = """
+def _item_range(max_items: int) -> str:
+    """'one to five' in the tool text for the default cap, digits otherwise."""
+    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six",
+             7: "seven", 8: "eight", 9: "nine", 10: "ten"}
+    if max_items == 1:
+        return "exactly one"
+    return f"one to {words.get(max_items, str(max_items))}"
+
+
+_MCP_INSTRUCTIONS_TEMPLATE = """
 This MCP server exposes five tools:
 
 1. get_current_datetime()
@@ -183,7 +193,7 @@ Use domains only for hard source restrictions. It returns backend-ordered
 titles, URLs, previews, dates, and compact backend outcomes; it does not
 embed, rerank, crawl, or ground the results.
 
-Use scrape_urls after URLs are already known. Pass one to five independent
+Use scrape_urls after URLs are already known. Pass __SCRAPE_ITEM_RANGE__ independent
 URL/query pairs. Omit an item's query or pass `*` to receive the configured
 2,000-token budget of clean Markdown in page order; supply a focused query
 only when relevant chunks should be selected. Each page also returns a
@@ -227,6 +237,29 @@ a real-world side effect -- logging in, submitting a form, posting, buying,
 changing settings -- requires explicit confirmation first. Call
 browser_act("close") when the research task is done.
 """.strip()
+
+
+def _render_instructions(max_scrape_items: int) -> str:
+    return _MCP_INSTRUCTIONS_TEMPLATE.replace(
+        "__SCRAPE_ITEM_RANGE__", _item_range(max_scrape_items)
+    )
+
+
+_DEFAULT_SCRAPE_MAX_ITEMS = 5
+MCP_INSTRUCTIONS = _render_instructions(_DEFAULT_SCRAPE_MAX_ITEMS)
+
+
+def _scrape_tool_description(max_items: int) -> str:
+    return (
+        f"Inspect {_item_range(max_items)} URL/query pairs. Each item has url and optional query; "
+        "omit query or use '*' for page-order content, or provide a focused query "
+        "describing needed evidence. Related links are navigation candidates; batch "
+        "URLs only after selecting them. Returns each item's success or error independently."
+    )
+
+
+def _scrape_items_description(max_items: int) -> str:
+    return f"{_item_range(max_items).capitalize()} items, each with url and optional query."
 
 
 def _log(message: str) -> None:
@@ -334,17 +367,12 @@ async def search_tool(
 @mcp.tool(
     name="scrape_urls",
     title="Scrape URLs",
-    description=(
-        "Inspect one to five URL/query pairs. Each item has url and optional query; "
-        "omit query or use '*' for page-order content, or provide a focused query "
-        "describing needed evidence. Related links are navigation candidates; batch "
-        "URLs only after selecting them. Returns each item's success or error independently."
-    ),
+    description=_scrape_tool_description(_DEFAULT_SCRAPE_MAX_ITEMS),
 )
 async def scrape_urls_tool(
     items: Annotated[
         list[dict[str, str | None]],
-        Field(description="One to five items, each with url and optional query."),
+        Field(description=_scrape_items_description(_DEFAULT_SCRAPE_MAX_ITEMS)),
     ],
 ) -> str:
     started = time.monotonic()
@@ -536,6 +564,27 @@ async def browser_act_tool(
     return await _browser(action, **resolve_act_arguments(action, supplied))
 
 
+def apply_scrape_item_limit(config: Mapping[str, Any] | None = None) -> int:
+    """Make the advertised scrape_urls batch size match scrape_max_items.
+
+    The tool and its schema are built by decorator at import time with the
+    default of five. The configured cap is only known at startup, so the tool
+    description, the items schema, and the server instructions are rewritten
+    here, and the model is told the number the server will actually accept.
+    """
+    max_items = int((config or load_tinysearch_config())["scrape_max_items"])
+    tool = mcp._tool_manager._tools.get("scrape_urls")
+    if tool is not None:
+        tool.description = _scrape_tool_description(max_items)
+        items_schema = tool.parameters.get("properties", {}).get("items")
+        if isinstance(items_schema, dict):
+            items_schema["description"] = _scrape_items_description(max_items)
+            items_schema["minItems"] = 1
+            items_schema["maxItems"] = max_items
+    mcp._mcp_server.instructions = _render_instructions(max_items)
+    return max_items
+
+
 def unregister_browser_tools_if_disabled() -> list[str]:
     """Drop the browser tools from the schema when the backend is off.
 
@@ -628,6 +677,7 @@ def register_management() -> None:
 def main() -> None:
     _enable_traceback_dump()
     configure_from_environment()
+    apply_scrape_item_limit()
     unregister_browser_tools_if_disabled()
     transport = os.environ.get("MCP_TRANSPORT", "stdio").strip() or "stdio"
     if transport not in {"stdio", "sse", "streamable-http"}:

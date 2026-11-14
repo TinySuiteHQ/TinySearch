@@ -95,3 +95,32 @@ class ScrapeUrlsToolTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScrapeItemLimitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        from tinysearch.servers import mcp_server
+
+        self.mcp_server = mcp_server
+        self.tool = mcp._tool_manager._tools["scrape_urls"]
+        self._description = self.tool.description
+        self._items = dict(self.tool.parameters["properties"]["items"])
+        self._instructions = mcp._mcp_server.instructions
+
+    def tearDown(self) -> None:
+        self.tool.description = self._description
+        self.tool.parameters["properties"]["items"] = self._items
+        mcp._mcp_server.instructions = self._instructions
+
+    def test_default_text_advertises_five(self) -> None:
+        self.assertIn("one to five URL/query pairs", self.tool.description)
+        self.assertIn("Pass one to five independent", mcp._mcp_server.instructions)
+
+    def test_configured_cap_rewrites_description_schema_and_instructions(self) -> None:
+        self.assertEqual(self.mcp_server.apply_scrape_item_limit({"scrape_max_items": 8}), 8)
+        items = self.tool.parameters["properties"]["items"]
+        self.assertIn("one to eight URL/query pairs", self.tool.description)
+        self.assertEqual(items["maxItems"], 8)
+        self.assertTrue(items["description"].startswith("One to eight items"))
+        self.assertIn("Pass one to eight independent", mcp._mcp_server.instructions)
+        self.assertNotIn("__SCRAPE_ITEM_RANGE__", mcp._mcp_server.instructions)

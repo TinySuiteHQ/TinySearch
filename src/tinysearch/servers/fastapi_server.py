@@ -79,7 +79,9 @@ class ScrapeBatchItem(BaseModel):
 class ScrapeBatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    items: list[ScrapeBatchItem] = Field(..., min_length=1, max_length=5)
+    # The upper bound is scrape_max_items, checked against the live config in
+    # scrape_endpoint rather than fixed in the schema.
+    items: list[ScrapeBatchItem] = Field(..., min_length=1)
     max_tokens: int = Field(4000, ge=1)
 
 
@@ -243,12 +245,22 @@ async def put_config_endpoint(payload: dict[str, Any]) -> dict[str, Any]:
 
 @app.post("/scrape")
 async def scrape_endpoint(request: ScrapeBatchRequest) -> dict[str, Any]:
-    """Scrape one to five independent URL/query pairs with per-item outcomes."""
+    """Scrape 1 to ``scrape_max_items`` independent URL/query pairs with per-item outcomes."""
     started = time.monotonic()
+    config = load_tinysearch_config()
+    max_items = int(config["scrape_max_items"])
+    if len(request.items) > max_items:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "code": "too_many_items",
+                "message": f"items must contain between 1 and {max_items} URL/query pairs",
+            },
+        )
     result = await core.scrape_urls(
         [item.model_dump(mode="json") for item in request.items],
         max_tokens=request.max_tokens,
-        config=load_tinysearch_config(),
+        config=config,
         crawler_session=_crawler_session,
     )
     # No caller identity on this API: aggregate counts only, if anything.

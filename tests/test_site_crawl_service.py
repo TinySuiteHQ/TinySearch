@@ -16,14 +16,16 @@ from tinysearch.services.site_crawl_service import (
 class AccessibilityExtractionTests(unittest.IsolatedAsyncioTestCase):
     async def test_prefers_ai_aria_snapshot(self) -> None:
         body = MagicMock()
-        body.aria_snapshot = AsyncMock(return_value='- heading "Example" [level=1]')
+        body.aria_snapshot = AsyncMock(
+            return_value='- heading "Example" [level=1] [ref=e2]\n- link "More":\n  - /url: /more'
+        )
         body.inner_text = AsyncMock(return_value="fallback")
         page = MagicMock()
         page.locator.return_value = body
 
         text = await _accessibility_text(page)
 
-        self.assertEqual(text, '- heading "Example" [level=1]')
+        self.assertEqual(text, "# Example\nMore")
         body.inner_text.assert_not_awaited()
 
     async def test_falls_back_to_visible_text(self) -> None:

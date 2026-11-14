@@ -13,6 +13,7 @@ from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
 
 from tinysearch.services.browser_runtime_service import PlaywrightRuntime
+from tinysearch.services.snapshot_text_service import clean_snapshot
 from tinysearch.services.text_chunking_service import chunk_text
 from tinysearch.services.token_counter_service import (
     decode_tokens,
@@ -73,14 +74,14 @@ def _strip_interaction_markers(snapshot: str) -> str:
 
 
 async def _accessibility_text(page: Any) -> str:
-    """Return Playwright AI accessibility text, with visible-text fallback."""
+    """Return the page's accessibility text as plain reading text, with visible-text fallback."""
     body = page.locator("body")
     try:
         snapshot = await body.aria_snapshot(mode="ai")
     except (AttributeError, TypeError):
         snapshot = ""
     if snapshot and snapshot.strip():
-        return _strip_interaction_markers(snapshot.strip())
+        return clean_snapshot(_strip_interaction_markers(snapshot.strip()))
     return (await body.inner_text()).strip()
 
 

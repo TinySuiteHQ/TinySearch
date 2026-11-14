@@ -254,11 +254,12 @@ async def scrape_urls(
     config: ConfigInput | None = None,
     crawler_session: BrowserCrawlerSession | None = None,
 ) -> dict[str, Any]:
-    """Scrape up to five URL/query pairs concurrently.
+    """Scrape up to ``scrape_max_items`` URL/query pairs (default five),
+    ``scrape_max_concurrent_items`` at a time.
 
     Each item needs ``url`` and may omit ``query`` (or set it to ``'*'``) for
     first-token page-order extraction. Repeat a URL in separate items when it
-    needs distinct focused queries; the five-item cap bounds total work.
+    needs distinct focused queries; the item cap bounds total work.
     """
     with span_scope(
         "tinysearch.scrape",
@@ -266,8 +267,10 @@ async def scrape_urls(
         operation="scrape",
         record_operation_metric=True,
     ) as telemetry:
-        if not 1 <= len(items) <= 5:
-            raise ValueError("items must contain between 1 and 5 URL/query pairs")
+        resolved = _resolve_config(config)
+        max_items = int(resolved["scrape_max_items"])
+        if not 1 <= len(items) <= max_items:
+            raise ValueError(f"items must contain between 1 and {max_items} URL/query pairs")
         if max_tokens <= 0:
             raise ValueError("max_tokens must be positive")
         normalized: list[tuple[str, str | None]] = []
@@ -280,7 +283,6 @@ async def scrape_urls(
                 raise ValueError("batch item query must be a string, null, or omitted")
             normalized.append((url, query))
 
-        resolved = _resolve_config(config)
         needs_embeddings = any(
             (query or "").strip() not in {"", "*"} for _, query in normalized
         )
@@ -321,19 +323,25 @@ async def scrape_urls(
                 unique_items.append((url, query))
             unique_indexes.append(index)
 
+        # Bounds the pages one call loads at once. A queued item waits here,
+        # before its own fetch starts, so the wait never counts against any
+        # per-page timeout.
+        semaphore = asyncio.Semaphore(int(resolved["scrape_max_concurrent_items"]))
+
+        async def scrape_one(url: str, query: str | None, crawler: Any | None) -> dict[str, Any]:
+            async with semaphore:
+                return await _scrape_url_with_config(
+                    url,
+                    query,
+                    max_tokens=max_tokens,
+                    config=resolved,
+                    crawler=crawler,
+                    embedder=shared_embedder,
+                )
+
         async with crawler_ctx as shared_crawler:
             unique_outcomes = await asyncio.gather(
-                *(
-                    _scrape_url_with_config(
-                        url,
-                        query,
-                        max_tokens=max_tokens,
-                        config=resolved,
-                        crawler=shared_crawler,
-                        embedder=shared_embedder,
-                    )
-                    for url, query in unique_items
-                ),
+                *(scrape_one(url, query, shared_crawler) for url, query in unique_items),
                 return_exceptions=True,
             )
         settled = [unique_outcomes[index] for index in unique_indexes]
