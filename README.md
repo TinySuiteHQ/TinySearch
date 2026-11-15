@@ -104,10 +104,8 @@ In this repository: [docs/token-savings.md](docs/token-savings.md) is the benchm
 ```bash
 git clone https://github.com/TinySuiteHQ/TinySearch
 cd TinySearch
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[server]"
-python -m unittest discover tests
+uv sync --extra server
+uv run python -m unittest discover tests
 ```
 
 TinySearch supports Python 3.12 and newer. CI tests Python 3.12, 3.13, and 3.14 across Linux, macOS, and Windows.

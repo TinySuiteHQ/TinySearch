@@ -35,17 +35,18 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install the base package
-        run: uv pip install --system .
+      # --locked fails if uv.lock is missing or out of date with pyproject.toml.
+      - name: Install the base package from uv.lock
+        run: uv sync --locked
 
       - name: Verify core imports without declared server dependencies
         run: |
-          python -c "import tinysearch; from tinysearch import TinySearchConfig, to_prompt"
-          python -c "import importlib.metadata as m; r=m.requires('tinysuite-search') or []; assert not any(x.lower().startswith(('fastapi','uvicorn','mcp')) and 'extra ==' not in x.lower() for x in r)"
-          python -c "import importlib.metadata as m; r=m.requires('tinysuite-search') or []; assert any(x.lower().startswith('opentelemetry-api') for x in r); assert not any(x.lower().startswith(('opentelemetry-sdk','opentelemetry-exporter-otlp')) and 'extra ==' not in x.lower() for x in r)"
+          uv run --no-sync python -c "import tinysearch; from tinysearch import TinySearchConfig, to_prompt"
+          uv run --no-sync python -c "import importlib.metadata as m; r=m.requires('tinysuite-search') or []; assert not any(x.lower().startswith(('fastapi','uvicorn','mcp')) and 'extra ==' not in x.lower() for x in r)"
+          uv run --no-sync python -c "import importlib.metadata as m; r=m.requires('tinysuite-search') or []; assert any(x.lower().startswith('opentelemetry-api') for x in r); assert not any(x.lower().startswith(('opentelemetry-sdk','opentelemetry-exporter-otlp')) and 'extra ==' not in x.lower() for x in r)"
 
       - name: Run core contract tests
-        run: python -m unittest tests.test_core tests.test_public_config_and_results tests.test_scrape_pipeline tests.test_grounded_prompt_service
+        run: uv run --no-sync python -m unittest tests.test_core tests.test_public_config_and_results tests.test_scrape_pipeline tests.test_grounded_prompt_service
 
   platform-tests:
     name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
@@ -81,14 +82,14 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install package with server and telemetry extras
-        run: uv pip install --system ".[server,telemetry]"
+      - name: Install package with server and telemetry extras from uv.lock
+        run: uv sync --locked --extra server --extra telemetry --python ${{ matrix.python-version }}
 
       - name: Run full test suite
-        run: python -m unittest discover tests
+        run: uv run --no-sync python -m unittest discover tests
 
       - name: Smoke-test MCP over stdio
-        run: python scripts/smoke_mcp_stdio.py
+        run: uv run --no-sync python scripts/smoke_mcp_stdio.py
 
   package:
     name: Build and install distributions
@@ -102,22 +103,27 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
 
       - name: Check release metadata
         run: python scripts/check_release_metadata.py
 
       - name: Build wheel and source distribution
         run: |
-          python -m pip install --upgrade pip build twine
-          python -m build
-          python -m twine check dist/*
+          uv build
+          uvx twine check dist/*
 
+      # Deliberately not from uv.lock: this resolves the wheel's own
+      # requirements the way a user's `pip install` would.
       - name: Install wheel with server and telemetry extras into a fresh environment
         run: |
-          python -m venv "${RUNNER_TEMP}/tinysearch-wheel"
+          uv venv "${RUNNER_TEMP}/tinysearch-wheel"
           WHEEL="$(find "${GITHUB_WORKSPACE}/dist" -name '*.whl' -print -quit)"
-          "${RUNNER_TEMP}/tinysearch-wheel/bin/python" -m pip install "${WHEEL}[server,telemetry]"
+          uv pip install --python "${RUNNER_TEMP}/tinysearch-wheel/bin/python" "${WHEEL}[server,telemetry]"
 
       - name: Verify installed wheel away from the checkout
         working-directory: ${{ runner.temp }}
@@ -151,13 +157,13 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install the base package
-        run: uv pip install --system .
+      - name: Install the base package from uv.lock
+        run: uv sync --locked
 
       - name: Run live search tests
         env:
           TINYSEARCH_RUN_LIVE_TESTS: "1"
-        run: python -m unittest tests.test_live_search
+        run: uv run --no-sync python -m unittest tests.test_live_search
 
   docker-build:
     name: Docker security and smoke test
