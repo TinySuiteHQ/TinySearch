@@ -23,6 +23,8 @@
   "scrape_max_items": 5,
   "_comment_scrape_max_concurrent_items": "Maximum pages one scrape_urls call loads at once; the rest wait their turn. Lower it on small hosts or for sites that throttle parallel requests. Values above scrape_max_items have no effect.",
   "scrape_max_concurrent_items": 5,
+  "_comment_scrape_settle_seconds": "After a page's HTML loads, wait up to this long for its network activity to settle, so content fetched by scripts is read too. Pages that settle sooner continue at once. 0 reads the page as soon as its HTML has loaded.",
+  "scrape_settle_seconds": 2.5,
   "_comment_scrape_max_tokens": "Scrape tools only. Maximum content tokens returned for each MCP scrape_url or scrape_urls item.",
   "scrape_max_tokens": 2000,
   "_comment_scrape_max_links": "Maximum related-link navigation candidates returned per page. Set to zero to skip link extraction and ranking.",

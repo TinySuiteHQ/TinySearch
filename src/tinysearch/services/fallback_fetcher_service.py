@@ -11,8 +11,9 @@ Contract: ``POST <scrape_fallback_fetcher_url>`` with the JSON body
 ``{"html": "<page html>", "final_url"?: "<url after redirects>",
 "status"?: <upstream HTTP status>}``. Any other answer is a failed fallback.
 
-The returned HTML is rendered offline (JavaScript off, network blocked), so
-the fetch service can supply page content but never code that runs here.
+The returned HTML is rendered with JavaScript off and only its stylesheets
+allowed to load (each checked like a page fetch), so the fetch service can
+supply page content but never code that runs here.
 """
 
 from __future__ import annotations
@@ -133,7 +134,7 @@ async def fetch_page_via_fallback(
     answer = await asyncio.to_thread(
         request_fallback_html, fetcher_url, url, timeout_seconds
     )
-    rendered = await render_html_text(answer["html"], crawler=crawler)
+    rendered = await render_html_text(answer["html"], crawler=crawler, url=answer["final_url"])
     return {
         "final_url": answer["final_url"],
         "html": answer["html"],

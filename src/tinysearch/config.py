@@ -28,6 +28,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "search_max_concurrent_items": 3,
     "scrape_max_items": 5,
     "scrape_max_concurrent_items": 5,
+    "scrape_settle_seconds": 2.5,
     "scrape_max_tokens": 2000,
     "scrape_max_links": 8,
     "scrape_max_link_tokens": 500,
@@ -110,6 +111,7 @@ _FLOAT_FIELDS = {
     "browser_action_timeout_seconds",
     "browser_session_wait_seconds",
     "scrape_fallback_fetcher_timeout_seconds",
+    "scrape_settle_seconds",
 }
 
 
@@ -155,6 +157,10 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     ):
         if config[key] <= 0:
             raise ValueError(f"tinysearch config {key} must be positive")
+    if config["scrape_settle_seconds"] < 0:
+        raise ValueError(
+            "tinysearch config scrape_settle_seconds must be zero (no wait) or positive"
+        )
     if config["browser_session_wait_seconds"] < 0:
         raise ValueError(
             "tinysearch config browser_session_wait_seconds must be zero (no wait) or positive"

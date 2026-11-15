@@ -92,9 +92,14 @@ fallback.
 ## Safety
 
 The returned HTML is rendered in TinySearch's Chromium with JavaScript turned
-off and every network request aborted, then read the same way as a normal
-scrape. The service can supply page content, but nothing in that content runs
-or loads anything.
+off, then read the same way as a normal scrape. It renders at the page's final
+URL and loads only its stylesheets, so content the site hides with CSS, such as
+closed dialogs or the mobile copy of a desktop table, stays hidden. Every
+stylesheet URL must pass the same URL-safety and `blocked_domains` checks as a
+page fetch, and every other request is aborted. If the final URL fails those
+checks, the HTML renders with no network access at all. The service can supply
+page content, but nothing in that content runs, and nothing but stylesheets
+loads.
 
 Run the service on a private network or loopback interface. TinySearch sends it
 every URL that triggers a fallback, so it sees which pages your agents read.

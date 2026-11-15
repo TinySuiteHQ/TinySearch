@@ -15,6 +15,7 @@ from rank_bm25 import BM25Okapi
 from tinysearch.services.browser_runtime_service import PlaywrightRuntime
 from tinysearch.services.snapshot_text_service import clean_snapshot
 from tinysearch.services.text_chunking_service import chunk_text
+from tinysearch.services.url_safety_service import assert_url_is_fetchable
 from tinysearch.services.token_counter_service import (
     decode_tokens,
     encode_tokens,
@@ -59,6 +60,49 @@ async def _abort_every_request(route: Any) -> None:
     await route.abort()
 
 
+# How long supplied HTML may wait for its stylesheets before it is read as-is.
+_STYLESHEET_WAIT_MS = 5_000
+
+
+def _stylesheet_route(*, html: str, blocked_domains: list[str]) -> Any:
+    """Route for rendering supplied HTML at its real URL with stylesheets only.
+
+    The first navigation is answered with the supplied HTML, so relative links
+    resolve against the page's own URL. Stylesheets load so that whatever the
+    site hides with CSS (closed dialogs, the mobile copy of a desktop table)
+    stays hidden. Each stylesheet URL must pass the same URL-safety and
+    blocked-domain checks as a page fetch. Every other request, including any
+    further navigation, is aborted; JavaScript is off in this context.
+    """
+    served = False
+    verdicts: dict[str, bool] = {}
+
+    def fetchable(url: str) -> bool:
+        try:
+            assert_url_is_fetchable(url, blocked_domains)
+        except Exception:
+            return False
+        return True
+
+    async def route(route: Any) -> None:
+        nonlocal served
+        request = route.request
+        if not served and request.is_navigation_request():
+            served = True
+            await route.fulfill(status=200, content_type="text/html; charset=utf-8", body=html)
+            return
+        if request.resource_type == "stylesheet":
+            url = request.url
+            if url not in verdicts:
+                verdicts[url] = await asyncio.to_thread(fetchable, url)
+            if verdicts[url]:
+                await route.continue_()
+                return
+        await route.abort()
+
+    return route
+
+
 _ARIA_REF_OR_CURSOR_RE = re.compile(r"\s*\[(?:ref=[^\]]+|cursor=[^\]]+)\]")
 
 
@@ -89,7 +133,15 @@ class DirectPlaywrightCrawler:
     """Reusable renderer exposing only the crawler contract TinySearch needs."""
 
     def __init__(self, config: Mapping[str, Any] | None = None) -> None:
+        self._config = dict(config or {})
         self._runtime = PlaywrightRuntime(config)
+
+    async def _settle(self, page: Any) -> None:
+        """Give content loaded after the HTML a moment to arrive, within a cap."""
+        seconds = float(self._config.get("scrape_settle_seconds", 2.5) or 0)
+        if seconds > 0:
+            with suppress(Exception):
+                await page.wait_for_load_state("networkidle", timeout=seconds * 1000)
 
     async def start(self) -> None:
         await self._runtime.start()
@@ -111,6 +163,7 @@ class DirectPlaywrightCrawler:
             await context.route("**/*", _route_scrape_request)
             page = await context.new_page()
             response = await page.goto(url, wait_until="domcontentloaded")
+            await self._settle(page)
             html = await page.content()
             text = await _accessibility_text(page)
             try:
@@ -130,17 +183,32 @@ class DirectPlaywrightCrawler:
         finally:
             await context.close()
 
-    async def render_html(self, *, html: str) -> dict[str, Any]:
+    async def render_html(self, *, html: str, url: str | None = None) -> dict[str, Any]:
         """Extract text from HTML fetched elsewhere, the same way `arun` does.
 
         The HTML came from an outside service, so it renders with JavaScript
-        off and every network request aborted: nothing in it runs or loads.
+        off. Given the page's URL, it renders at that URL and loads only its
+        stylesheets (see `_stylesheet_route`), so CSS-hidden content stays
+        hidden. Without a URL, or if the URL is not fetchable, every request is
+        aborted and the HTML renders exactly as supplied.
         """
+        blocked_domains = list(self._config.get("blocked_domains") or [])
+        if url:
+            try:
+                await asyncio.to_thread(assert_url_is_fetchable, url, blocked_domains)
+            except Exception:
+                url = None
         context = await self._runtime.new_context(java_script_enabled=False)
         try:
-            await context.route("**/*", _abort_every_request)
             page = await context.new_page()
-            await page.set_content(html, wait_until="domcontentloaded")
+            if url:
+                await context.route("**/*", _stylesheet_route(html=html, blocked_domains=blocked_domains))
+                with suppress(Exception):
+                    # A slow stylesheet only means the page is read without it.
+                    await page.goto(url, wait_until="load", timeout=_STYLESHEET_WAIT_MS)
+            else:
+                await context.route("**/*", _abort_every_request)
+                await page.set_content(html, wait_until="domcontentloaded")
             text = await _accessibility_text(page)
             try:
                 title = await page.title()
@@ -151,12 +219,14 @@ class DirectPlaywrightCrawler:
             await context.close()
 
 
-async def render_html_text(html: str, *, crawler: Any | None = None) -> dict[str, Any]:
-    """Render supplied HTML offline on the shared crawler, or a short-lived one."""
+async def render_html_text(
+    html: str, *, crawler: Any | None = None, url: str | None = None
+) -> dict[str, Any]:
+    """Render supplied HTML (see `render_html`) on the shared crawler, or a short-lived one."""
     if crawler is not None:
-        return await crawler.render_html(html=html)
+        return await crawler.render_html(html=html, url=url)
     async with create_browser_crawler() as owned_crawler:
-        return await owned_crawler.render_html(html=html)
+        return await owned_crawler.render_html(html=html, url=url)
 
 
 def create_browser_crawler(config: Mapping[str, Any] | None = None) -> DirectPlaywrightCrawler:

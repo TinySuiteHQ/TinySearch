@@ -25,7 +25,7 @@ Part of [TinySuite](https://tinysuite.dev). Comes built in to [TinyWebUI](https:
 ![MCP Server](https://img.shields.io/badge/MCP-server-blue)
 ![FastAPI](https://img.shields.io/badge/FastAPI-supported-009688)
 
-<img src="assets/tinysearch-readme.gif" alt="TinySearch returning source-grounded web evidence to an AI agent" width="780" />
+<img src="assets/tinysearch-demo.webp" width="760" alt="TinySearch in about 30 seconds, live in TinyWebUI: a research question answered with sources, the page passages the model was shown, a Wikipedia article read in a real browser, and TinySearch's record of what was read" />
 
 **[Read the documentation → tinysuite.dev/docs/tinysearch](https://tinysuite.dev/docs/tinysearch/)**
 
@@ -78,10 +78,6 @@ Fast `search` starts without Chromium or an embedding model. The first scrape in
 ```bash
 uvx --from "tinysuite-search[server]" tinysearch setup
 ```
-
-<p align="center">
-  <img src="assets/demo_terminal_prompt.gif" alt="TinySearch CLI setup and first run in a terminal" width="780" />
-</p>
 
 From Python, `pip install tinysuite-search` and call `search` and `scrape_urls` directly ([Python library](https://tinysuite.dev/docs/tinysearch/#python-library)). The recommended flow is the same everywhere: `search` for lightweight discovery, then `scrape_urls` for the pages worth reading.
 

@@ -191,3 +191,54 @@ class CleanSnapshotTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MainContentFirstTests(unittest.TestCase):
+    PAGE = "\n".join([
+        "- banner:",
+        "  - link \"Home\":",
+        "    - /url: /",
+        "- navigation:",
+        "  - list:",
+        "    - listitem:",
+        "      - link \"Sport\":",
+        "        - /url: /sport",
+        "- main:",
+        "  - heading \"Az igazság mániákusai\" [level=1]",
+        "  - paragraph: Az HBO is felült a true crime vonatra.",
+        "- contentinfo:",
+        "  - paragraph: © 2026 Example",
+    ])
+
+    def test_main_landmark_comes_first_and_nothing_is_dropped(self) -> None:
+        self.assertEqual(
+            clean_snapshot(self.PAGE).splitlines(),
+            ["# Az igazság mániákusai", "Az HBO is felült a true crime vonatra.", "Home", "- Sport", "© 2026 Example"],
+        )
+
+    def test_articles_lead_when_there_is_no_main(self) -> None:
+        page = "- navigation:\n  - link \"Menu\"\n- article:\n  - paragraph: Story one\n- article:\n  - paragraph: Story two"
+        self.assertEqual(clean_snapshot(page).splitlines(), ["Story one", "Story two", "Menu"])
+
+    def test_articles_inside_main_stay_in_place(self) -> None:
+        page = "- navigation:\n  - link \"Menu\"\n- main:\n  - heading \"Title\" [level=1]\n  - article:\n    - paragraph: Body"
+        self.assertEqual(clean_snapshot(page).splitlines(), ["# Title", "Body", "Menu"])
+
+    def test_page_without_landmarks_keeps_its_order(self) -> None:
+        page = "- link \"First\"\n- paragraph: Second\n- heading \"Third\" [level=2]"
+        self.assertEqual(clean_snapshot(page).splitlines(), ["First", "Second", "## Third"])
+
+    @unittest.skipIf(yaml is None, "PyYAML is not installed")
+    def test_reordering_loses_no_visible_string(self) -> None:
+        haystack = _collapse(clean_snapshot(self.PAGE))
+        self.assertEqual([t for t in _visible_strings(self.PAGE) if _collapse(t) not in haystack], [])
+
+
+class YamlEscapeTests(unittest.TestCase):
+    def test_decodes_yaml_only_escapes(self) -> None:
+        cleaned = clean_snapshot('- paragraph: "USB \\x41nd caf\\u00e9\\_end"')
+        self.assertEqual(cleaned, "USB And café\xa0end")
+
+    def test_unknown_escape_returns_snapshot_unchanged(self) -> None:
+        snapshot = '- text: "bad \\q escape"'
+        self.assertEqual(clean_snapshot(snapshot), snapshot)

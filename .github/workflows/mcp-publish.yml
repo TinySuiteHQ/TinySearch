@@ -52,15 +52,15 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           IMAGE_URL="https://hub.docker.com/v2/repositories/marcellm01/tinysearch/tags/${TAG}"
-          for attempt in $(seq 1 30); do
+          for attempt in $(seq 1 75); do
             if curl --fail --silent --show-error "$IMAGE_URL" > /dev/null; then
               echo "Docker image marcellm01/tinysearch:${TAG} is available."
               exit 0
             fi
-            echo "Waiting for Docker image marcellm01/tinysearch:${TAG} (${attempt}/30)..."
+            echo "Waiting for Docker image marcellm01/tinysearch:${TAG} (${attempt}/75)..."
             sleep 20
           done
-          echo "Docker image marcellm01/tinysearch:${TAG} was not available after 10 minutes." >&2
+          echo "Docker image marcellm01/tinysearch:${TAG} was not available after 25 minutes." >&2
           exit 1
 
       - name: Install mcp-publisher

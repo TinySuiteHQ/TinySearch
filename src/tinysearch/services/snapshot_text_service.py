@@ -29,6 +29,13 @@ page text is never inspected beyond the checks below):
   accessible name of links, headings, and cells.
 - Consecutive identical lines are collapsed to one.
 
+Nothing else is removed, but the page's main content comes first: the text of
+its ``main`` landmarks, or without one its top-level ``article`` landmarks, is
+placed before everything else (navigation, header, footer, sidebars), in page
+order within each part. A reader that stops after a token budget then spends
+it on the page's subject rather than its menus. A page with neither landmark
+keeps its original order.
+
 Anything the parser does not recognise makes `clean_snapshot` return the
 snapshot unchanged, so an unexpected Playwright format costs tokens rather
 than text.
@@ -36,7 +43,6 @@ than text.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 
@@ -66,6 +72,30 @@ class SnapshotFormatError(ValueError):
     """The snapshot has a shape this module does not recognise."""
 
 
+# YAML 1.2 double-quoted escapes (a superset of JSON's).
+_YAML_SIMPLE_ESCAPES = {
+    "0": "\0", "a": "\a", "b": "\b", "t": "\t", "\t": "\t", "n": "\n", "v": "\v",
+    "f": "\f", "r": "\r", "e": "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",
+    "N": "\x85", "_": "\xa0", "L": "", "P": "",
+}
+_YAML_ESCAPE_RE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|(.))", re.DOTALL)
+
+
+def _unescape_double_quoted(quoted: str) -> str:
+    """Decode a YAML double-quoted scalar, quotes included."""
+
+    def replace(match: re.Match[str]) -> str:
+        hex_digits = match.group(1) or match.group(2) or match.group(3)
+        if hex_digits:
+            return chr(int(hex_digits, 16))
+        escaped = _YAML_SIMPLE_ESCAPES.get(match.group(4))
+        if escaped is None:
+            raise SnapshotFormatError(quoted)
+        return escaped
+
+    return _YAML_ESCAPE_RE.sub(replace, quoted[1:-1])
+
+
 @dataclass
 class _Node:
     role: str
@@ -90,7 +120,7 @@ def _split_quoted(text: str) -> tuple[str, str]:
     match = re.match(_QUOTED_NAME, text)
     if match is None:
         raise SnapshotFormatError(text)
-    return json.loads(match.group(0)), text[match.end() :]
+    return _unescape_double_quoted(match.group(0)), text[match.end() :]
 
 
 def _scalar(text: str) -> str:
@@ -127,7 +157,7 @@ def _parse_entry(body: str) -> _Node:
         # A quoted entry that is not a node header is a bare text item.
         return _Node(role="text", value=header)
     if match["quoted"]:
-        name = json.loads(match["quoted"])
+        name = _unescape_double_quoted(match["quoted"])
     else:
         name = match["slashed"] or ""
     return _Node(role=match["role"], name=name, value=value, attrs=match["attrs"])
@@ -218,13 +248,35 @@ def _render(node: _Node, lines: list[str]) -> None:
         _render(child, lines)
 
 
+def _detach_landmarks(node: _Node, role: str) -> list[_Node]:
+    """Remove the outermost nodes with ``role`` from the tree and return them in page order."""
+    found: list[_Node] = []
+    kept: list[_Node] = []
+    for child in node.children:
+        if child.role == role:
+            found.append(child)
+        else:
+            found.extend(_detach_landmarks(child, role))
+            kept.append(child)
+    node.children = kept
+    return found
+
+
+def _has_role(node: _Node, role: str) -> bool:
+    return node.role == role or any(_has_role(child, role) for child in node.children)
+
+
 def clean_snapshot(snapshot: str) -> str:
     """Plain reading text for an ARIA snapshot; the snapshot itself if it won't parse."""
     try:
         tree = parse_snapshot(snapshot)
     except (SnapshotFormatError, ValueError):
         return snapshot
+    main_role = next((role for role in ("main", "article") if _has_role(tree, role)), None)
+    main_content = _detach_landmarks(tree, main_role) if main_role else []
     rendered: list[str] = []
+    for landmark in main_content:
+        _render(landmark, rendered)
     _render(tree, rendered)
     lines: list[str] = []
     for line in rendered:

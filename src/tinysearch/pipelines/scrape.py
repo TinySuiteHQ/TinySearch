@@ -155,7 +155,7 @@ def _links_under_budget(
     return selected, total
 
 
-# Margin beyond the fetch service's own deadline for the offline render of
+# Margin beyond the fetch service's own deadline for rendering
 # its HTML, so a hung render cannot hold the scrape open indefinitely.
 _FALLBACK_RENDER_GRACE_SECONDS = 15.0
 

@@ -107,11 +107,11 @@ class RequestFallbackHtmlTests(unittest.TestCase):
 
 class FetchPageViaFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def test_renders_returned_html_on_the_supplied_crawler(self) -> None:
-        rendered: list[str] = []
+        rendered: list[tuple[str, str | None]] = []
 
         class _Crawler:
-            async def render_html(self, *, html: str) -> dict:
-                rendered.append(html)
+            async def render_html(self, *, html: str, url: str | None = None) -> dict:
+                rendered.append((html, url))
                 return {"markdown_raw": "Rendered text", "title": "Rendered"}
 
         with patch(
@@ -129,7 +129,8 @@ class FetchPageViaFallbackTests(unittest.IsolatedAsyncioTestCase):
                 crawler=_Crawler(),
             )
 
-        self.assertEqual(rendered, ["<p>Rendered text</p>"])
+        # Rendered at the page's final URL, so its stylesheets can resolve.
+        self.assertEqual(rendered, [("<p>Rendered text</p>", "https://example.com/y")])
         self.assertEqual(
             page,
             {
