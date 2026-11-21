@@ -31,14 +31,22 @@ def _check_chromium() -> tuple[bool, str]:
         from playwright.sync_api import sync_playwright
     except ImportError:
         return False, "playwright is not installed"
+    from tinysearch.services.browser_bundle_service import (
+        headless_shell_dir,
+        headless_shell_installed,
+    )
+
     try:
         with sync_playwright() as p:
             executable = Path(p.chromium.executable_path)
     except Exception as exc:
         return False, f"could not resolve the Chromium executable path: {exc}"
-    if executable.exists():
-        return True, str(executable)
-    return False, f"Chromium executable not found at {executable} (run `tinysearch setup`)"
+    shell = headless_shell_dir(executable)
+    if shell is None:
+        return False, f"could not find Chromium's headless shell folder from {executable}"
+    if headless_shell_installed(executable):
+        return True, str(shell)
+    return False, f"Chromium headless shell not found at {shell} (run `tinysearch setup`)"
 
 
 def _display_cdp_endpoint(cdp_url: str) -> str:

@@ -42,8 +42,10 @@ COPY pyproject.toml uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project --extra server --extra telemetry
 
+# Only Chrome Headless Shell: TinySearch launches Chromium headless, which
+# Playwright never serves from full Chromium.
 RUN mkdir -p /ms-playwright \
-    && playwright install --with-deps chromium \
+    && playwright install --with-deps --only-shell chromium \
     && chmod -R a+rX /ms-playwright
 
 COPY . .
