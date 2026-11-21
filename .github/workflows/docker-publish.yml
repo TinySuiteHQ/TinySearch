@@ -145,3 +145,26 @@ jobs:
         env:
           DIGEST: ${{ steps.push.outputs.digest }}
         run: cosign sign --yes "${IMAGE_NAME}@${DIGEST}"
+
+      # Docker Hub never reads the README from GitHub, so this copies it there,
+      # with relative links made absolute. Updating a description needs a token
+      # with Read, Write, Delete access, kept apart from the push token; until
+      # DOCKERHUB_DESCRIPTION_TOKEN exists this is skipped. Only a run that moves
+      # :latest updates it, so rebuilding an older version never restores an older README.
+      - name: Check for the Docker Hub description token
+        id: description
+        if: contains(steps.tags.outputs.value, ':latest')
+        env:
+          TOKEN: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN }}
+        run: |
+          if [ -n "$TOKEN" ]; then echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else echo "::notice::DOCKERHUB_DESCRIPTION_TOKEN is not set; the Docker Hub description was not updated"; fi
+
+      - name: Update the Docker Hub description
+        if: steps.description.outputs.enabled == 'true'
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_DESCRIPTION_TOKEN }}
+          repository: ${{ env.IMAGE_NAME }}
+          enable-url-completion: true
