@@ -17,6 +17,7 @@ from starlette.routing import BaseRoute, Mount, Route
 
 from tinysearch import core
 from tinysearch.services.site_crawl_service import BrowserCrawlerSession
+from tinysearch.config import DEFAULT_CONFIG
 from tinysearch.services.tinysearch_config_service import load_tinysearch_config
 from tinysearch.telemetry import configure_from_environment, shutdown as shutdown_telemetry
 
@@ -195,7 +196,7 @@ embed, rerank, crawl, or ground the results.
 
 Use scrape_urls after URLs are already known. Pass __SCRAPE_ITEM_RANGE__ independent
 URL/query pairs. Omit an item's query or pass `*` to receive the configured
-2,000-token budget of clean Markdown in page order; supply a focused query
+__SCRAPE_MAX_TOKENS__-token budget of clean Markdown in page order; supply a focused query
 only when relevant chunks should be selected. Each page also returns a
 bounded list of related_links -- links found on that page, ranked against
 the query -- so you can decide which page to open next. It does not crawl
@@ -239,14 +240,15 @@ browser_act("close") when the research task is done.
 """.strip()
 
 
-def _render_instructions(max_scrape_items: int) -> str:
+def _render_instructions(max_scrape_items: int, max_scrape_tokens: int) -> str:
     return _MCP_INSTRUCTIONS_TEMPLATE.replace(
         "__SCRAPE_ITEM_RANGE__", _item_range(max_scrape_items)
-    )
+    ).replace("__SCRAPE_MAX_TOKENS__", f"{max_scrape_tokens:,}")
 
 
 _DEFAULT_SCRAPE_MAX_ITEMS = 5
-MCP_INSTRUCTIONS = _render_instructions(_DEFAULT_SCRAPE_MAX_ITEMS)
+_DEFAULT_SCRAPE_MAX_TOKENS = int(DEFAULT_CONFIG["scrape_max_tokens"])
+MCP_INSTRUCTIONS = _render_instructions(_DEFAULT_SCRAPE_MAX_ITEMS, _DEFAULT_SCRAPE_MAX_TOKENS)
 
 
 def _scrape_tool_description(max_items: int) -> str:
@@ -565,14 +567,17 @@ async def browser_act_tool(
 
 
 def apply_scrape_item_limit(config: Mapping[str, Any] | None = None) -> int:
-    """Make the advertised scrape_urls batch size match scrape_max_items.
+    """Make the advertised scrape_urls batch size and token budget match the config.
 
     The tool and its schema are built by decorator at import time with the
-    default of five. The configured cap is only known at startup, so the tool
-    description, the items schema, and the server instructions are rewritten
-    here, and the model is told the number the server will actually accept.
+    defaults (five items, 2,000 tokens). The configured values are only known
+    at startup, so the tool description, the items schema, and the server
+    instructions are rewritten here, and the model is told the numbers the
+    server will actually use.
     """
-    max_items = int((config or load_tinysearch_config())["scrape_max_items"])
+    resolved = config or load_tinysearch_config()
+    max_items = int(resolved["scrape_max_items"])
+    max_tokens = int(resolved.get("scrape_max_tokens", _DEFAULT_SCRAPE_MAX_TOKENS))
     tool = mcp._tool_manager._tools.get("scrape_urls")
     if tool is not None:
         tool.description = _scrape_tool_description(max_items)
@@ -581,7 +586,7 @@ def apply_scrape_item_limit(config: Mapping[str, Any] | None = None) -> int:
             items_schema["description"] = _scrape_items_description(max_items)
             items_schema["minItems"] = 1
             items_schema["maxItems"] = max_items
-    mcp._mcp_server.instructions = _render_instructions(max_items)
+    mcp._mcp_server.instructions = _render_instructions(max_items, max_tokens)
     return max_items
 
 

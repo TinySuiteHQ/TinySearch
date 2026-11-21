@@ -124,3 +124,12 @@ class ScrapeItemLimitTests(unittest.TestCase):
         self.assertTrue(items["description"].startswith("One to eight items"))
         self.assertIn("Pass one to eight independent", mcp._mcp_server.instructions)
         self.assertNotIn("__SCRAPE_ITEM_RANGE__", mcp._mcp_server.instructions)
+
+    def test_default_instructions_advertise_default_token_budget(self) -> None:
+        self.assertIn("configured\n2,000-token budget", mcp._mcp_server.instructions)
+
+    def test_configured_token_budget_rewrites_instructions(self) -> None:
+        self.mcp_server.apply_scrape_item_limit({"scrape_max_items": 3, "scrape_max_tokens": 4000})
+        self.assertIn("4,000-token budget", mcp._mcp_server.instructions)
+        self.assertNotIn("2,000-token", mcp._mcp_server.instructions)
+        self.assertNotIn("__SCRAPE_MAX_TOKENS__", mcp._mcp_server.instructions)
