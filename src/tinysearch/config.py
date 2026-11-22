@@ -29,6 +29,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scrape_max_items": 5,
     "scrape_max_concurrent_items": 5,
     "scrape_settle_seconds": 2.5,
+    "scrape_http_first": False,
     "scrape_max_tokens": 2000,
     "scrape_max_links": 8,
     "scrape_max_link_tokens": 500,
@@ -305,7 +306,22 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
     config["search_backend_fallback"] = bool(
         config.get("search_backend_fallback", True)
     )
+    config["scrape_http_first"] = _flag(config.get("scrape_http_first"), "scrape_http_first")
     return config
+
+
+def _flag(value: Any, name: str) -> bool:
+    """A true/false setting, also accepting the strings an env var or form sends."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"", "0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"tinysearch config {name} must be true or false")
 
 
 @dataclass(frozen=True)

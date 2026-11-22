@@ -25,6 +25,8 @@
   "scrape_max_concurrent_items": 5,
   "_comment_scrape_settle_seconds": "After a page's HTML loads, wait up to this long for its network activity to settle, so content fetched by scripts is read too. Pages that settle sooner continue at once. 0 reads the page as soon as its HTML has loaded.",
   "scrape_settle_seconds": 2.5,
+  "_comment_scrape_http_first": "Try a plain HTTP fetch before loading a page in the browser. Pages whose text is in their HTML are then read without running their scripts, which is much faster; pages that need their scripts, don't answer the plain request with a page, or have too little text get TinySearch's normal browser load instead.",
+  "scrape_http_first": false,
   "_comment_scrape_max_tokens": "Scrape tools only. Maximum content tokens returned for each MCP scrape_url or scrape_urls item.",
   "scrape_max_tokens": 2000,
   "_comment_scrape_max_links": "Maximum related-link navigation candidates returned per page. Set to zero to skip link extraction and ranking.",

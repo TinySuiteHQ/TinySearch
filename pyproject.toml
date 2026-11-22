@@ -22,6 +22,8 @@ dependencies = [
     # Browser automation and scraping both use Playwright directly. The floor
     # is required for aria_snapshot(mode="ai") / depth support.
     "playwright>=1.59,<2",
+    # Plain HTTP fetch, the first tier of a scrape (already pulled in by openai/ddgs).
+    "httpx>=0.27,<1",
     "tiktoken==0.12.0",
     "rank-bm25==0.2.2",
     "pypdf==6.21.4",

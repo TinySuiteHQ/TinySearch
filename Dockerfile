@@ -1,4 +1,10 @@
 # syntax=docker/dockerfile:1
+
+# uv installs exactly the versions pinned in uv.lock. Pinned by digest so a
+# rebuild can't pick up a different uv. It is mounted for the steps that use it,
+# not copied in: the running image never needs it.
+FROM ghcr.io/astral-sh/uv:0.12.22@sha256:f513a91fc62fe7c17567eee97230dd198e43edb8a9fbecca843714a4358fe1bc AS uv
+
 FROM python:3.12-slim
 
 ARG TINYSEARCH_VERSION=dev
@@ -9,10 +15,6 @@ LABEL org.opencontainers.image.title="TinySearch" \
       org.opencontainers.image.source="https://github.com/TinySuiteHQ/TinySearch" \
       org.opencontainers.image.version="${TINYSEARCH_VERSION}" \
       io.modelcontextprotocol.server.name="io.github.TinySuiteHQ/tinysearch"
-
-# uv installs exactly the versions pinned in uv.lock. Pinned by digest so a
-# rebuild can't pick up a different uv.
-COPY --from=ghcr.io/astral-sh/uv:0.12.22@sha256:f513a91fc62fe7c17567eee97230dd198e43edb8a9fbecca843714a4358fe1bc /uv /uvx /bin/
 
 # UV_COMPILE_BYTECODE writes .pyc files at build time, so the server doesn't
 # compile every module on each start (PYTHONDONTWRITEBYTECODE only stops writes
@@ -32,24 +34,33 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
-    && apt-get install -y --no-install-recommends ca-certificates curl gosu libatomic1 \
+    && apt-get install -y --no-install-recommends ca-certificates gosu libatomic1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Dependencies and Chromium depend only on the lockfile, so these layers are
 # reused until uv.lock changes; a source-only change skips straight to the
 # project install below.
 COPY pyproject.toml uv.lock ./
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,target=/root/.cache/uv --mount=from=uv,source=/uv,target=/bin/uv \
     uv sync --locked --no-dev --no-install-project --extra server --extra telemetry
 
 # Only Chrome Headless Shell: TinySearch launches Chromium headless, which
-# Playwright never serves from full Chromium.
-RUN mkdir -p /ms-playwright \
-    && playwright install --with-deps --only-shell chromium \
+# Playwright never serves from full Chromium. Its system libraries are listed
+# here rather than taken from --with-deps, which installs what a windowed
+# Chromium needs (a virtual display, a software GPU stack, many fonts). One
+# font family is enough to lay pages out; text is read from the page, not drawn.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+       libasound2t64 libatk1.0-0t64 libatspi2.0-0t64 libdbus-1-3 libexpat1 libgbm1 \
+       libglib2.0-0t64 libnspr4 libnss3 libx11-6 libxcb1 libxcomposite1 libxdamage1 \
+       libxext6 libxfixes3 libxkbcommon0 libxrandr2 fonts-liberation \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /ms-playwright \
+    && playwright install --only-shell chromium \
     && chmod -R a+rX /ms-playwright
 
 COPY . .
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,target=/root/.cache/uv --mount=from=uv,source=/uv,target=/bin/uv \
     uv sync --locked --no-dev --no-editable --extra server --extra telemetry \
     && uv pip check --python /app/.venv/bin/python \
     && /usr/local/bin/python3 -m pip uninstall --yes pip setuptools \

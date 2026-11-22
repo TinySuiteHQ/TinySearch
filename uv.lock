@@ -1,5 +1,5 @@
 version = 1
-revision = 5
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -1844,6 +1844,7 @@ version = "0.7.1"
 source = { editable = "." }
 dependencies = [
     { name = "ddgs" },
+    { name = "httpx" },
     { name = "huggingface-hub" },
     { name = "onnxruntime" },
     { name = "openai" },
@@ -1872,6 +1873,7 @@ telemetry = [
 requires-dist = [
     { name = "ddgs", specifier = ">=9.14.4,<10" },
     { name = "fastapi", marker = "extra == 'server'", specifier = "==0.140.7" },
+    { name = "httpx", specifier = ">=0.27,<1" },
     { name = "huggingface-hub", specifier = "==1.25.1" },
     { name = "mcp", marker = "extra == 'server'", specifier = "==1.30.0" },
     { name = "onnxruntime", specifier = ">=1.17.0,<2" },

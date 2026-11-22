@@ -28,6 +28,7 @@ from tinysearch.services.scrape_service import (
     EmptyContentError,
     FetchUnavailableError,
     HtmlCrawlFn,
+    PageNotFoundError,
     ScrapeResult,
     UnsupportedDocumentError,
     extract_document_with_timeout,
@@ -38,8 +39,8 @@ from tinysearch.services.scrape_service import (
     utc_iso8601_z,
 )
 from tinysearch.services.token_counter_service import decode_tokens, encode_tokens
+from tinysearch.services.http_fetch_service import DocumentResponse
 from tinysearch.services.fallback_fetcher_service import (
-    FALLBACK_TRIGGER_STATUSES,
     FallbackFetchFn,
     fetch_page_via_fallback,
     page_needs_fallback,
@@ -155,6 +156,41 @@ def _links_under_budget(
     return selected, total
 
 
+async def _fetch_page(
+    url: str,
+    query: str | None,
+    *,
+    timeout_seconds: float,
+    crawl_fn: HtmlCrawlFn,
+    crawler: Any | None,
+) -> dict[str, Any]:
+    """Fetch one HTML page, recording which tier served it and why it escalated."""
+    with span_scope(
+        "tinysearch.fetch",
+        attributes={"tinysearch.document.type": "html"},
+        operation="fetch",
+    ) as fetch_telemetry:
+        page = await fetch_html_with_timeout(
+            url=url,
+            query=query,
+            timeout_seconds=timeout_seconds,
+            crawl_fn=crawl_fn,
+            crawler=crawler,
+        )
+        page_metadata = page.get("metadata") or {}
+        fetch_tier = str(page_metadata.get("fetch_tier") or "browser")
+        fetch_telemetry.complete(
+            attributes={
+                "tinysearch.browser.used": fetch_tier == "browser",
+                "tinysearch.fetch.tier": fetch_tier,
+                "tinysearch.fetch.escalation_reason": str(
+                    page_metadata.get("escalation_reason") or ""
+                ),
+            }
+        )
+    return page
+
+
 # Margin beyond the fetch service's own deadline for rendering
 # its HTML, so a hung render cannot hold the scrape open indefinitely.
 _FALLBACK_RENDER_GRACE_SECONDS = 15.0
@@ -237,8 +273,9 @@ async def run_scrape_pipeline(
     crawl_metadata: dict[str, Any] = {}
     candidate_links: list[dict[str, str]] = []
 
-    if is_document:
-        suffix = url_path_suffix(safe_url)
+    async def read_document(url: str) -> str:
+        nonlocal document_fn
+        suffix = url_path_suffix(url)
         if suffix == "doc":
             raise UnsupportedDocumentError(
                 "legacy .doc files are not supported; use PDF or DOCX"
@@ -250,7 +287,9 @@ async def run_scrape_pipeline(
             # per-request timeout would keep that thread (and its socket) alive
             # well past the point callers were told the fetch had timed out.
             document_fn = partial(
-                extract_document_text, timeout_seconds=min(fetch_timeout_seconds, 30.0)
+                extract_document_text,
+                timeout_seconds=min(fetch_timeout_seconds, 30.0),
+                config=resolved,
             )
         with span_scope(
             "tinysearch.fetch",
@@ -260,39 +299,45 @@ async def run_scrape_pipeline(
             },
             operation="fetch",
         ) as fetch_telemetry:
-            markdown, _document_type = await extract_document_with_timeout(
-                url=safe_url,
+            text, _document_type = await extract_document_with_timeout(
+                url=url,
                 timeout_seconds=fetch_timeout_seconds,
                 document_fn=document_fn,
             )
             fetch_telemetry.complete()
+        return text
+
+    if is_document:
+        markdown = await read_document(safe_url)
     else:
         if crawl_fn is None:
             crawl_fn = fetch_html_for_query
-        with span_scope(
-            "tinysearch.fetch",
-            attributes={"tinysearch.browser.used": True, "tinysearch.document.type": "html"},
-            operation="fetch",
-        ) as fetch_telemetry:
-            page = await fetch_html_with_timeout(
-                url=safe_url,
-                query=None if raw_page_order else cleaned_query,
-                timeout_seconds=fetch_timeout_seconds,
-                crawl_fn=crawl_fn,
-                crawler=crawler,
+        try:
+            page = await _fetch_page(
+                safe_url, None if raw_page_order else cleaned_query,
+                timeout_seconds=fetch_timeout_seconds, crawl_fn=crawl_fn, crawler=crawler,
             )
-            fetch_telemetry.complete()
+        except DocumentResponse:
+            # A PDF or DOCX at a path that doesn't say so: read it as one.
+            page = None
+            is_document = True
+            markdown = await read_document(safe_url)
+    if not is_document and page is not None:
         if page_needs_fallback(page, min_words=int(resolved["scrape_fallback_min_words"])):
             fallback_page = await _fallback_page_or_none(
                 safe_url, resolved=resolved, fallback_fn=fallback_fn, crawler=crawler
             )
             if fallback_page is not None:
                 page = fallback_page
-            elif page_status(page) in FALLBACK_TRIGGER_STATUSES:
-                raise FetchUnavailableError(
-                    f"{safe_url} answered HTTP {page_status(page)}; "
-                    "no readable copy of the page was available"
-                )
+        # An error page's text is never evidence about the page asked for.
+        status = page_status(page)
+        if status in (404, 410):
+            raise PageNotFoundError(f"{safe_url} answered HTTP {status}: the page doesn't exist")
+        if status is not None and status >= 400:
+            raise FetchUnavailableError(
+                f"{safe_url} answered HTTP {status}; "
+                "no readable copy of the page was available"
+            )
         final_url = str(page.get("final_url") or safe_url)
         html = str(page.get("html") or "")
         crawl_metadata = page.get("metadata") or {}

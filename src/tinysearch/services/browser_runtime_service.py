@@ -120,27 +120,13 @@ class PlaywrightRuntime:
 
     def _next_proxy(self) -> dict[str, str] | None:
         """Pick the next configured proxy, round-robin, for rotation across contexts."""
-        servers = [
-            entry.strip()
-            for entry in str(self._config.get("browser_proxy_server") or "").split(",")
-            if entry.strip()
-        ]
-        if not servers:
+        from tinysearch.services.http_fetch_service import configured_proxies
+
+        proxies = configured_proxies(self._config)
+        if not proxies:
             return None
-
-        server = servers[self._next_proxy_index % len(servers)]
+        proxy = proxies[self._next_proxy_index % len(proxies)]
         self._next_proxy_index += 1
-
-        proxy: dict[str, str] = {"server": server}
-        username = str(self._config.get("browser_proxy_username") or "").strip()
-        password = str(self._config.get("browser_proxy_password") or "").strip()
-        bypass = str(self._config.get("browser_proxy_bypass") or "").strip()
-        if username:
-            proxy["username"] = username
-        if password:
-            proxy["password"] = password
-        if bypass:
-            proxy["bypass"] = bypass
         return proxy
 
     async def start(self) -> None:

@@ -15,6 +15,9 @@ from tinysearch.services.token_counter_service import (
     decode_tokens,
     encode_tokens,
 )
+import httpx
+
+from tinysearch.services.http_fetch_service import DocumentResponse, PlainFetchError
 from tinysearch.services.url_safety_service import (
     BlockedUrlError,
     InvalidUrlError,
@@ -47,11 +50,15 @@ class EmptyContentError(ScrapeError):
 
 
 class FetchUnavailableError(ScrapeError):
-    """The page answered HTTP 403, 429, or 503 and no readable copy was fetched.
+    """The page answered an error status and no readable copy was fetched.
 
     Raised instead of returning the error page's text, which is never
     evidence about the requested page.
     """
+
+
+class PageNotFoundError(ScrapeError):
+    """The page answered HTTP 404 or 410: it doesn't exist (any more)."""
 
 
 SCRAPE_ERROR_MAP: dict[type, tuple[str, int]] = {
@@ -60,6 +67,7 @@ SCRAPE_ERROR_MAP: dict[type, tuple[str, int]] = {
     FetchTimeoutError: ("fetch_timeout", 504),
     FetchFailedError: ("fetch_failed", 502),
     FetchUnavailableError: ("fetch_unavailable", 502),
+    PageNotFoundError: ("not_found", 404),
     UnsupportedDocumentError: ("unsupported_document", 415),
     EmptyContentError: ("empty_content", 422),
 }
@@ -231,7 +239,7 @@ async def fetch_html_with_timeout(
             return await crawl_fn(**kwargs)
     except (asyncio.TimeoutError, TimeoutError) as exc:
         raise FetchTimeoutError(f"fetch timed out after {timeout_seconds}s") from exc
-    except (InvalidUrlError, BlockedUrlError):
+    except (InvalidUrlError, BlockedUrlError, DocumentResponse):
         raise
     except Exception as exc:  # noqa: BLE001 - mapped to a stable user-facing code
         raise FetchFailedError(f"fetch failed: {exc}") from exc
@@ -246,13 +254,13 @@ async def extract_document_with_timeout(
     try:
         async with asyncio.timeout(timeout_seconds):
             return await asyncio.to_thread(document_fn, url)
-    except (asyncio.TimeoutError, TimeoutError) as exc:
-        raise FetchTimeoutError(f"fetch timed out after {timeout_seconds}s") from exc
+    except (asyncio.TimeoutError, TimeoutError, httpx.TimeoutException, socket.timeout) as exc:
+        raise FetchTimeoutError(f"download timed out after {timeout_seconds}s") from exc
+    except (InvalidUrlError, BlockedUrlError):
+        raise  # a redirect to a refused address is refused, not "unsupported"
     except ValueError as exc:
         raise UnsupportedDocumentError(str(exc)) from exc
-    except (urllib.error.URLError, socket.timeout) as exc:
-        if isinstance(exc, socket.timeout):
-            raise FetchTimeoutError(f"download timed out: {exc}") from exc
+    except (PlainFetchError, httpx.HTTPError, urllib.error.URLError) as exc:
         raise FetchFailedError(f"download failed: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
         raise FetchFailedError(f"document extraction failed: {exc}") from exc

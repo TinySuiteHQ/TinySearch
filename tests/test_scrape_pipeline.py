@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from tinysearch import to_prompt
 from tinysearch.config import normalize_config
@@ -972,6 +972,7 @@ class ScrapeErrorMapTests(unittest.TestCase):
                 "fetch_timeout",
                 "fetch_failed",
                 "fetch_unavailable",
+                "not_found",
                 "unsupported_document",
                 "empty_content",
             },
@@ -979,6 +980,55 @@ class ScrapeErrorMapTests(unittest.TestCase):
 
     def test_default_max_tokens(self) -> None:
         self.assertEqual(DEFAULT_SCRAPE_MAX_TOKENS, 4000)
+
+
+class ErrorPageAndDocumentTests(unittest.IsolatedAsyncioTestCase):
+    """An error page is never returned as content; documents are read as documents."""
+
+    def _page(self, status: int) -> AsyncMock:
+        return AsyncMock(return_value={
+            "final_url": "https://example.com/x", "html": "<p>Sorry</p>",
+            "markdown_raw": " ".join(["sorry this page could not be found"] * 20),
+            "metadata": {"status": status},
+        })
+
+    async def test_404_and_410_are_not_found(self) -> None:
+        from tinysearch.services.scrape_service import PageNotFoundError
+
+        for status in (404, 410):
+            with self.subTest(status), patch(
+                "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=lambda u, _b: u
+            ):
+                with self.assertRaises(PageNotFoundError):
+                    await run_scrape_pipeline("https://example.com/x", None, config={}, crawl_fn=self._page(status))
+
+    async def test_other_error_statuses_are_unavailable(self) -> None:
+        from tinysearch.services.scrape_service import FetchUnavailableError
+
+        for status in (401, 500, 502):
+            with self.subTest(status), patch(
+                "tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=lambda u, _b: u
+            ):
+                with self.assertRaises(FetchUnavailableError):
+                    await run_scrape_pipeline("https://example.com/x", None, config={}, crawl_fn=self._page(status))
+
+    async def test_a_document_response_is_read_as_a_document(self) -> None:
+        from tinysearch.services.http_fetch_service import DocumentResponse
+
+        crawl = AsyncMock(side_effect=DocumentResponse("https://example.com/paper/123"))
+        seen: list[str] = []
+
+        def document(url: str) -> tuple[str, str]:
+            seen.append(url)
+            return "Attention is all you need. " * 20, "pdf"
+
+        with patch("tinysearch.pipelines.scrape.assert_url_is_fetchable", side_effect=lambda u, _b: u):
+            result = await run_scrape_pipeline(
+                "https://example.com/paper/123", None, config={}, crawl_fn=crawl, document_fn=document
+            )
+        self.assertEqual(seen, ["https://example.com/paper/123"])
+        self.assertIn("Attention", result.chunks[0]["text"])
+        self.assertEqual(result.title, "")
 
 
 if __name__ == "__main__":

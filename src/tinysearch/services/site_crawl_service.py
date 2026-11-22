@@ -2,12 +2,13 @@ import asyncio
 import re
 import sys
 import tempfile
+import time
 from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
+import httpx
 from docx import Document
 from pypdf import PdfReader
 from rank_bm25 import BM25Okapi
@@ -129,6 +130,62 @@ async def _accessibility_text(page: Any) -> str:
     return (await body.inner_text()).strip()
 
 
+# A plain response with fewer readable words than this is treated as a page
+# that still needed its scripts (a loading screen), whatever the configured
+# fallback minimum is.
+_PLAIN_TIER_MIN_WORDS = 30
+# Below this many readable words, a plain page whose HTML is at least this
+# share inline script goes to the browser (see `_try_plain_tier`).
+_SCRIPT_BUILT_MAX_WORDS = 300
+_SCRIPT_BUILT_MIN_SHARE = 0.20
+# Answers to a plain request that a full page load would only repeat.
+_FINAL_PLAIN_STATUSES = frozenset({404, 410, 429})
+
+# Domains whose pages recently needed the browser, so their next pages skip
+# the plain fetch. In memory only, bounded, and short-lived.
+_NEEDS_BROWSER_TTL_SECONDS = 600.0
+_NEEDS_BROWSER_MAX_DOMAINS = 512
+_needs_browser: dict[str, float] = {}
+
+
+def _domain(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
+def _remember_needs_browser(url: str) -> None:
+    domain = _domain(url)
+    if not domain:
+        return
+    _needs_browser.pop(domain, None)
+    _needs_browser[domain] = time.monotonic() + _NEEDS_BROWSER_TTL_SECONDS
+    while len(_needs_browser) > _NEEDS_BROWSER_MAX_DOMAINS:
+        _needs_browser.pop(next(iter(_needs_browser)))
+
+
+def _says_domain_needs_browser(reason: str) -> bool:
+    """Whether one page's escalation says the rest of its site will need the browser too.
+
+    A missing page or a PDF link says nothing about the site; a script-built
+    page, or one that only serves its page to a full browser load, does.
+    """
+    if reason == "not_html":
+        return False
+    if reason.startswith("status_"):
+        return reason in {"status_401", "status_403", "status_503"}
+    return True
+
+
+def _recently_needed_browser(url: str) -> bool:
+    domain = _domain(url)
+    expires = _needs_browser.get(domain)
+    if expires is None:
+        return False
+    if expires < time.monotonic():
+        _needs_browser.pop(domain, None)
+        return False
+    return True
+
+
 class DirectPlaywrightCrawler:
     """Reusable renderer exposing only the crawler contract TinySearch needs."""
 
@@ -156,13 +213,110 @@ class DirectPlaywrightCrawler:
     async def __aexit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         await self.close()
 
+    async def fetch(self, *, url: str) -> dict[str, Any]:
+        """Read a page the cheapest way that works: plain HTTP, then a full page load.
+
+        The plain tier is skipped when it is off (``scrape_http_first``) or
+        when this domain needed the browser recently. Its HTML is read with the same
+        extractor as a full load (``render_html``: JavaScript off, stylesheets
+        only), so the output looks the same whichever tier served it. The
+        result's ``metadata`` names the tier and why it escalated, if it did.
+        """
+        reason = self._plain_tier_skip_reason(url)
+        if reason is None:
+            page, reason = await self._try_plain_tier(url)
+            if page is not None:
+                return page
+            if _says_domain_needs_browser(reason):
+                _remember_needs_browser(url)
+        result = await self.arun(url=url)
+        metadata = dict(result.get("metadata") or {})
+        metadata["fetch_tier"] = "browser"
+        if reason:
+            metadata["escalation_reason"] = reason
+        result["metadata"] = metadata
+        return result
+
+    def _plain_tier_skip_reason(self, url: str) -> str | None:
+        if not self._config.get("scrape_http_first"):
+            return ""  # off: not an escalation, so no reason is recorded
+        if _recently_needed_browser(url):
+            return "domain_hint"
+        return None
+
+    async def _try_plain_tier(self, url: str) -> tuple[dict[str, Any] | None, str]:
+        """The page from a plain fetch, or None and why the browser is needed."""
+        from tinysearch.services.fallback_fetcher_service import page_needs_fallback, visible_word_count
+        from tinysearch.services.http_fetch_service import (
+            DOCUMENT_CONTENT_TYPES,
+            DocumentResponse,
+            PlainFetchError,
+            fetch_plain,
+            plain_response_needs_browser,
+            script_share,
+        )
+        from tinysearch.services.url_safety_service import BlockedUrlError, InvalidUrlError
+
+        try:
+            plain = await fetch_plain(url, config=self._config)
+        except (InvalidUrlError, BlockedUrlError):
+            raise  # a refused hop is refused for the browser too
+        except (PlainFetchError, httpx.HTTPError) as exc:
+            return None, f"plain_fetch_failed:{type(exc).__name__}"
+        if plain["status"] < 400 and plain["content_type"] in DOCUMENT_CONTENT_TYPES:
+            raise DocumentResponse(plain["final_url"])
+        if plain["status"] in _FINAL_PLAIN_STATUSES:
+            # Not found, gone, or asked for fewer requests: that is the answer.
+            # Loading the page again in the browser would only ask twice.
+            return {
+                "url": plain["final_url"],
+                "redirected_url": plain["final_url"],
+                "html": plain["html"],
+                "markdown_raw": "",
+                "metadata": {"title": "", "status": plain["status"], "fetch_tier": "http"},
+            }, ""
+        reason = plain_response_needs_browser(plain["status"], plain["content_type"], plain["html"])
+        if reason:
+            return None, reason
+        rendered = await self.render_html(html=plain["html"], url=plain["final_url"])
+        page = {
+            "url": plain["final_url"],
+            "redirected_url": plain["final_url"],
+            "html": plain["html"],
+            "markdown_raw": str(rendered.get("markdown_raw") or ""),
+            "metadata": {
+                "title": rendered.get("title") or "",
+                "status": plain["status"],
+                "fetch_tier": "http",
+            },
+        }
+        min_words = max(int(self._config.get("scrape_fallback_min_words") or 0), _PLAIN_TIER_MIN_WORDS)
+        if page_needs_fallback(page, min_words=min_words):
+            return None, "too_little_text"
+        # A short page whose HTML is largely script is usually an app that
+        # builds its content in the browser, with only menus and a footer in
+        # the HTML itself.
+        if (
+            visible_word_count(page["markdown_raw"]) < _SCRIPT_BUILT_MAX_WORDS
+            and script_share(plain["html"]) >= _SCRIPT_BUILT_MIN_SHARE
+        ):
+            return None, "script_built_page"
+        return page, ""
+
     async def arun(self, *, url: str, config: Any = None) -> dict[str, Any]:
         del config
         context = await self._runtime.new_context()
         try:
             await context.route("**/*", _route_scrape_request)
             page = await context.new_page()
-            response = await page.goto(url, wait_until="domcontentloaded")
+            try:
+                response = await page.goto(url, wait_until="domcontentloaded")
+            except Exception as exc:
+                if "Download is starting" in str(exc):
+                    from tinysearch.services.http_fetch_service import DocumentResponse
+
+                    raise DocumentResponse(url) from exc
+                raise
             await self._settle(page)
             html = await page.content()
             text = await _accessibility_text(page)
@@ -316,18 +470,6 @@ def is_document_url(url: str) -> bool:
     return url_path_suffix(url) in {"pdf", "docx", "doc"}
 
 
-def _download_url_bytes(url: str, *, timeout_seconds: float = 30.0) -> bytes:
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "TinySearch/0.1",
-            "Accept": "*/*",
-        },
-    )
-    with urlopen(req, timeout=timeout_seconds) as resp:
-        return resp.read()
-
-
 def _extract_pdf_text(data: bytes) -> str:
     with tempfile.SpooledTemporaryFile(max_size=20 * 1024 * 1024) as tmp:
         tmp.write(data)
@@ -359,18 +501,40 @@ def _extract_docx_text(data: bytes) -> str:
         return "\n\n".join(parts).strip()
 
 
-def extract_document_text(url: str, *, timeout_seconds: float = 30.0) -> tuple[str, str]:
+def document_type(url: str, content_type: str, data: bytes) -> str | None:
+    """'pdf', 'docx', or None: from the URL's suffix, then the Content-Type, then the bytes."""
+    from tinysearch.services.http_fetch_service import DOCUMENT_CONTENT_TYPES
+
     suffix = url_path_suffix(url)
-    if suffix == "doc":
+    if suffix in {"pdf", "docx"}:
+        return suffix
+    if content_type in DOCUMENT_CONTENT_TYPES:
+        return DOCUMENT_CONTENT_TYPES[content_type]
+    if data.startswith(b"%PDF-"):
+        return "pdf"
+    if data.startswith(b"PK") and b"word/" in data[:65536]:
+        return "docx"
+    return None
+
+
+def extract_document_text(
+    url: str,
+    *,
+    timeout_seconds: float = 30.0,
+    config: Mapping[str, Any] | None = None,
+) -> tuple[str, str]:
+    """Download a PDF or DOCX (every redirect checked, size capped) and extract its text."""
+    from tinysearch.services.http_fetch_service import download_document
+
+    if url_path_suffix(url) == "doc":
         raise ValueError("legacy .doc files are not supported; use PDF or DOCX")
-
-    data = _download_url_bytes(url, timeout_seconds=timeout_seconds)
-    if suffix == "pdf":
-        return _extract_pdf_text(data), "pdf"
-    if suffix == "docx":
-        return _extract_docx_text(data), "docx"
-
-    raise ValueError(f"unsupported document type: {suffix or 'unknown'}")
+    download = download_document(url, config=config or {}, timeout=timeout_seconds)
+    kind = document_type(download["final_url"], download["content_type"], download["body"])
+    if kind == "pdf":
+        return _extract_pdf_text(download["body"]), "pdf"
+    if kind == "docx":
+        return _extract_docx_text(download["body"]), "docx"
+    raise ValueError(f"unsupported document type: {download['content_type'] or 'unknown'}")
 
 
 def _tokenize_for_bm25(text: str) -> list[str]:
@@ -415,24 +579,33 @@ async def fetch_html_for_query(
     *,
     crawler: Any | None = None,
 ) -> dict[str, Any]:
-    """Render with Playwright and return accessibility text plus full HTML."""
+    """Fetch a page (plain HTTP or a full load, see `DirectPlaywrightCrawler.fetch`).
+
+    Returns accessibility text plus full HTML.
+    """
     del user_query
     ensure_utf8_stdio()
 
     with span_scope(
         "tinysearch.browser",
-        attributes={"tinysearch.browser.used": True},
         operation="browser",
     ) as browser_telemetry:
         if crawler is not None:
-            result = await crawler.arun(url=url, config=None)
+            result = await crawler.fetch(url=url)
         else:
             async with create_browser_crawler() as owned_crawler:
-                result = await owned_crawler.arun(url=url, config=None)
-        browser_telemetry.complete()
+                result = await owned_crawler.fetch(url=url)
+        metadata_obj = _result_field(result, "metadata", {})
+        metadata = dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
+        tier = str(metadata.get("fetch_tier") or "browser")
+        browser_telemetry.complete(
+            attributes={
+                "tinysearch.browser.used": tier == "browser",
+                "tinysearch.fetch.tier": tier,
+                "tinysearch.fetch.escalation_reason": str(metadata.get("escalation_reason") or ""),
+            }
+        )
 
-    metadata_obj = _result_field(result, "metadata", {})
-    metadata = dict(metadata_obj) if isinstance(metadata_obj, Mapping) else {}
     final_url = (
         _result_field(result, "redirected_url", None)
         or _result_field(result, "url", None)

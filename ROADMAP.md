@@ -49,22 +49,6 @@ Initial actions should remain small:
 
 The resulting page should flow back through TinySearch's existing extraction and relevance pipeline instead of returning an unbounded browser/DOM dump.
 
-### User-managed site logins — #59
-
-Let the user sign in to a set of sites they choose, so TinySearch can read pages there that anonymous retrieval cannot reach, such as authenticated documentation, private dashboards, and internal tools.
-
-Logins are always the user's decision, never the framework's:
-
-- **The user defines the sites.** A site is added from TinySearch's management surface in TinyWebUI (or from the CLI, e.g. `tinysearch login <url>`), which opens a visible browser for the user to sign in themselves.
-- **TinySearch never prompts for a login.** It does not detect login walls and open windows mid-task, and the model cannot start a login. When a saved session stops working, TinySearch reports that the session for that site has expired; the user signs in again when they choose to.
-- **Sessions apply only to their own site.** A saved session (cookies and local storage) is used only for the domain it was created for. Every other site is read anonymously.
-- **Sessions, not credentials.** TinySearch stores the resulting browser session, never usernames or passwords, and never automates the sign-in itself. Session files stay owner-only and per-user on multi-user servers.
-- **Managed like the rest of TinySearch.** TinyWebUI's management view lists the user's sites with their session state and lets them add a site, sign in again, or remove it, over the existing `tinysuite.manage` contract.
-
-Existing storage-state and external CDP browser support remain available for setups that bring their own logged-in browser.
-
-Credential storage and account automation remain out of scope. Users are responsible for complying with the terms of sites they sign in to.
-
 ## Phase 2 — Measure retrieval quality
 
 ### Evidence check for the benchmark — #58
@@ -99,6 +83,7 @@ Potential future work includes:
 
 - source-aware handling for structured or difficult sources such as code hosts, forums, social platforms, video sites, PDFs, and documentation sites;
 - additional search/browser/model backends where real users require them.
+- a guided sign-in for sites the user chooses (#59). Today an operator can give TinySearch a signed-in browser through `browser_storage_state_path` (a saved cookie file) or `browser_cdp_url` (their own browser), on their own decision and responsibility.
 
 These are intentionally not committed roadmap items yet. They should be added only when real usage or evaluation data demonstrates that the core primitives cannot solve the problem cleanly.
 

@@ -94,7 +94,7 @@ class DirectPlaywrightCrawlerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_fetch_keeps_old_signature_but_does_not_prefilter(self) -> None:
         crawler = MagicMock()
-        crawler.arun = AsyncMock(
+        crawler.fetch = AsyncMock(
             return_value={
                 "url": "https://example.com",
                 "redirected_url": "https://example.com/final",
@@ -110,9 +110,7 @@ class DirectPlaywrightCrawlerTests(unittest.IsolatedAsyncioTestCase):
             crawler=crawler,
         )
 
-        crawler.arun.assert_awaited_once_with(
-            url="https://example.com", config=None
-        )
+        crawler.fetch.assert_awaited_once_with(url="https://example.com")
         self.assertEqual(result["final_url"], "https://example.com/final")
         self.assertEqual(result["markdown_raw"], "- paragraph: evidence")
 
