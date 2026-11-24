@@ -845,6 +845,20 @@ async def _fake_html_forbidden(*, url, user_query):
     }
 
 
+def _fake_html_status(status: int, title: str):
+    """A readable-length error page: enough words that no fallback is asked for."""
+
+    async def _fake(*, url, user_query):
+        return {
+            "final_url": url,
+            "html": f"<html><head><title>{title}</title></head><body></body></html>",
+            "markdown_raw": f"# {title}\n" + _LONG_TEXT,
+            "metadata": {"title": title, "status": status},
+        }
+
+    return _fake
+
+
 def _fallback_returning(page: dict | None = None, *, error: Exception | None = None):
     calls: list[dict] = []
 
@@ -900,6 +914,38 @@ class ScrapeFallbackFetcherTests(unittest.IsolatedAsyncioTestCase):
         forbidden_again = await _fake_html_forbidden(url="https://example.com/x", user_query=None)
         with self.assertRaises(FetchUnavailableError):
             await self._scrape(_fake_html_forbidden, _fallback_returning(forbidden_again))
+
+    async def test_not_found_page_raises_fetch_unavailable(self) -> None:
+        # A 404 with a full page of navigation text is still not the page.
+        with self.assertRaises(FetchUnavailableError) as ctx:
+            await self._scrape(_fake_html_status(404, "Page not found"))
+        self.assertIn("HTTP 404", str(ctx.exception))
+
+    async def test_not_found_page_never_calls_fallback(self) -> None:
+        # 404 and 410 mean the page is not there; a second fetch path cannot
+        # return it, so the fallback is not asked.
+        fallback = _fallback_returning()
+        with self.assertRaises(FetchUnavailableError):
+            await self._scrape(_fake_html_status(404, "Page not found"), fallback)
+        self.assertEqual(fallback.calls, [])
+
+    async def test_other_error_statuses_raise_fetch_unavailable(self) -> None:
+        for status in (400, 401, 410, 500, 502, 504):
+            with self.subTest(status=status), self.assertRaises(FetchUnavailableError):
+                await self._scrape(_fake_html_status(status, f"Error {status}"))
+
+    async def test_success_statuses_are_content(self) -> None:
+        for status in (200, 203, 299):
+            with self.subTest(status=status):
+                result = await self._scrape(_fake_html_status(status, "Article"))
+                self.assertIn("Sentence 1", result.chunks[0]["text"])
+
+    async def test_fallback_that_answers_not_found_raises_fetch_unavailable(self) -> None:
+        not_found = await _fake_html_status(404, "Page not found")(
+            url="https://example.com/x", user_query=None
+        )
+        with self.assertRaises(FetchUnavailableError):
+            await self._scrape(_fake_html_forbidden, _fallback_returning(not_found))
 
     async def test_empty_page_uses_fallback_content(self) -> None:
         fallback = _fallback_returning()

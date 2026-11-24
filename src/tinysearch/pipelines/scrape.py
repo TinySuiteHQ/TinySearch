@@ -293,6 +293,15 @@ async def run_scrape_pipeline(
                     f"{safe_url} answered HTTP {page_status(page)}; "
                     "no readable copy of the page was available"
                 )
+        # An error page is never evidence about the requested page, whatever its
+        # length. A 404 with a site's full navigation is long enough to skip
+        # the fallback check above, so the status is checked on its own too.
+        status = page_status(page)
+        if status is not None and status >= 400:
+            raise FetchUnavailableError(
+                f"{safe_url} answered HTTP {status}; "
+                "no readable copy of the page was available"
+            )
         final_url = str(page.get("final_url") or safe_url)
         html = str(page.get("html") or "")
         crawl_metadata = page.get("metadata") or {}
