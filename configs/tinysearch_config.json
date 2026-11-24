@@ -37,6 +37,8 @@
   "scrape_fallback_fetcher_timeout_seconds": 60,
   "_comment_scrape_fallback_min_words": "A page with fewer visible words than this also goes to the fallback fetcher. Zero limits that to pages with no text.",
   "scrape_fallback_min_words": 30,
+  "_comment_scrape_refused_host_ttl_seconds": "After a host answers 403, 429 or 503 with no readable copy, further scrape_urls and browser_navigate requests to that host fail from memory, without a fetch, for this many seconds. Never retries or works around the refusal. Zero turns it off.",
+  "scrape_refused_host_ttl_seconds": 600,
   "_comment_search_top_k": "Deprecated, unused by any shipped pipeline (formerly the removed research tool). Number of raw search results requested before reranking.",
   "search_top_k": 30,
   "_comment_chunk_rrf_cutoff": "Scrape. Minimum reciprocal-rank-fusion score for page chunks. Zero disables score filtering.",

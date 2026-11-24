@@ -18,6 +18,7 @@ from typing import Any
 from tinysearch.config import ConfigInput, resolve_config
 from tinysearch.pipelines.scrape import run_scrape_pipeline
 from tinysearch.results import public_chunk, public_link, result_envelope
+from tinysearch.services.blocked_host_cache import SHARED_REFUSED_HOSTS
 from tinysearch.services.current_datetime_service import current_datetime_payload
 from tinysearch.services.embedding_service import (
     create_batching_embedder,
@@ -207,6 +208,7 @@ async def _scrape_url_with_config(
             config=config,
             crawler=crawler,
             embedder=embedder,
+            refused_hosts=SHARED_REFUSED_HOSTS,
         )
         source = {
             "id": "1",

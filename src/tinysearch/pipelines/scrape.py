@@ -37,6 +37,7 @@ from tinysearch.services.scrape_service import (
     select_chunks_under_budget,
     utc_iso8601_z,
 )
+from tinysearch.services.blocked_host_cache import BlockedHostCache
 from tinysearch.services.token_counter_service import decode_tokens, encode_tokens
 from tinysearch.services.fallback_fetcher_service import (
     FALLBACK_TRIGGER_STATUSES,
@@ -208,6 +209,7 @@ async def run_scrape_pipeline(
     document_fn: DocumentExtractFn | None = None,
     crawler: Any | None = None,
     fallback_fn: FallbackFetchFn | None = None,
+    refused_hosts: BlockedHostCache | None = None,
 ) -> ScrapeResult:
     """Extract a URL in page order, or rank chunks only for a supplied query.
 
@@ -217,6 +219,11 @@ async def run_scrape_pipeline(
     Pass `crawler` (an already-started direct Playwright crawler, see
     site_crawl_service.create_browser_crawler()) to reuse one browser across
     several pipeline calls instead of launching a fresh one per call.
+
+    Pass `refused_hosts` to remember hosts that answered 403/429/503 with no
+    readable copy: for ``scrape_refused_host_ttl_seconds`` afterwards, any URL
+    on that host is refused from memory without a fetch. Without it, nothing
+    is remembered.
     """
     cleaned_query = (query or "").strip()
     raw_page_order = cleaned_query in {"", "*"}
@@ -229,6 +236,11 @@ async def run_scrape_pipeline(
     safe_url = assert_url_is_fetchable(url, blocked_domains)
     fetch_timeout_seconds = float(resolved["pipeline_timeout_seconds"] or 120.0)
     tokenizer_name = tokenizer_name_for_config(resolved)
+    refused_host_ttl = float(resolved["scrape_refused_host_ttl_seconds"])
+    if refused_hosts is not None and refused_host_ttl > 0:
+        refusal = refused_hosts.refusal_for(safe_url)
+        if refusal is not None:
+            raise refused_hosts.refused_error(safe_url, refusal)
 
     is_document = is_document_url(safe_url)
     final_url = safe_url
@@ -289,6 +301,10 @@ async def run_scrape_pipeline(
             if fallback_page is not None:
                 page = fallback_page
             elif page_status(page) in FALLBACK_TRIGGER_STATUSES:
+                if refused_hosts is not None:
+                    refused_hosts.remember(
+                        safe_url, page_status(page), ttl_seconds=refused_host_ttl
+                    )
                 raise FetchUnavailableError(
                     f"{safe_url} answered HTTP {page_status(page)}; "
                     "no readable copy of the page was available"

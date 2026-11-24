@@ -35,6 +35,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scrape_fallback_fetcher_url": "",
     "scrape_fallback_fetcher_timeout_seconds": 60.0,
     "scrape_fallback_min_words": 30,
+    "scrape_refused_host_ttl_seconds": 600.0,
     "search_top_k": 10,
     "chunk_rrf_cutoff": 0.0,
     "chunk_dense_weight": 0.5,
@@ -112,6 +113,7 @@ _FLOAT_FIELDS = {
     "browser_session_wait_seconds",
     "scrape_fallback_fetcher_timeout_seconds",
     "scrape_settle_seconds",
+    "scrape_refused_host_ttl_seconds",
 }
 
 
@@ -174,6 +176,11 @@ def normalize_config(raw: Mapping[str, Any] | None = None) -> dict[str, Any]:
         raise ValueError(
             "tinysearch config scrape_fallback_min_words must be zero "
             "(only empty pages) or positive"
+        )
+    if config["scrape_refused_host_ttl_seconds"] < 0:
+        raise ValueError(
+            "tinysearch config scrape_refused_host_ttl_seconds must be zero "
+            "(remember nothing) or positive"
         )
     raw_timeout = config.get("pipeline_timeout_seconds")
     config["pipeline_timeout_seconds"] = (
