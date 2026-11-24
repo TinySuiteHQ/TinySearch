@@ -38,6 +38,7 @@ import weakref
 from collections.abc import Mapping
 from typing import Any
 
+from tinysearch.services.blocked_host_cache import SHARED_REFUSED_HOSTS
 from tinysearch.services.browser_runtime_service import PlaywrightRuntime, storage_state_for
 from tinysearch.telemetry import span_scope
 
@@ -101,6 +102,14 @@ class BrowserToolError(Exception):
 
 class BrowserDisabledError(BrowserToolError):
     """Browser tools were called while `browser_backend` is "off"."""
+
+
+class BrowserHostRefusedError(BrowserToolError):
+    """navigate was asked for a host that refused automated access a moment ago."""
+
+
+def _refused_host_ttl(config: Mapping[str, Any]) -> float:
+    return float(config.get("scrape_refused_host_ttl_seconds") or 0.0)
 
 
 def resolve_act_arguments(action: str, supplied: Mapping[str, Any]) -> dict[str, Any]:
@@ -404,7 +413,14 @@ class BrowserSession:
         find: str | None = None,
     ) -> str:
         page = await self.page()
-        await page.goto(url, wait_until="domcontentloaded")
+        response = await page.goto(url, wait_until="domcontentloaded")
+        # A refusal the browser sees is remembered exactly as one scrape_urls
+        # sees, so neither tool asks that host again until the entry expires.
+        # This call still returns what the browser got.
+        if response is not None:
+            SHARED_REFUSED_HOSTS.remember(
+                url, response.status, ttl_seconds=_refused_host_ttl(self._config)
+            )
         return await self._observation(depth, find)
 
     async def look(
@@ -588,6 +604,16 @@ async def call_tool(
     """Run one browser tool and return its capped text response."""
     if name not in TOOL_NAMES:
         raise BrowserToolError(f"unknown browser tool {name!r}")
+    # Checked before a session is taken, so a refused host never starts a
+    # browser. Only navigate is gated: the other actions work on a page that
+    # is already open, and a browser is no way around a site's refusal.
+    if name == "navigate" and _refused_host_ttl(config) > 0:
+        url = str(arguments.get("url") or "")
+        refusal = SHARED_REFUSED_HOSTS.refusal_for(url)
+        if refusal is not None:
+            raise BrowserHostRefusedError(
+                str(SHARED_REFUSED_HOSTS.refused_error(url, refusal))
+            )
     session = await acquire_session(config, owner, principal)
 
     with span_scope(

@@ -39,6 +39,30 @@ TinySearch no longer returns it as if it were.
 The final URL the fetcher reports goes through the same URL safety checks and
 `blocked_domains` rules as any redirect.
 
+## Refused hosts are remembered briefly
+
+When an item fails with `fetch_unavailable` because the site answered 403, 429
+or 503, `scrape_urls` remembers that host for `scrape_refused_host_ttl_seconds`
+(default 600, ten minutes). Until then, any URL on that host (same page or
+another one, HTML or document) fails at once as `HostRecentlyRefusedError`,
+without a fetch and without asking the fallback fetcher. The message says when
+the host refused and that a person can open the page in their own browser.
+
+The memory only skips fetches. It never retries, changes request headers, or
+tries another way past the refusal; after the TTL the host is fetched normally
+once more. A host is matched by its lowercase name without a leading `www.`, so
+subdomains such as `cdn.example.com` are separate. Pages that read normally,
+including ones rescued by the fallback fetcher, are never remembered, and 404s
+are not refusals. Tool calls are stateless, so the memory is per host for the
+whole server process, not per conversation. `0` turns it off.
+
+`browser_navigate` shares the same memory. A host remembered by either tool
+fails `browser_navigate` before a browser is started, and a 403, 429 or 503
+that the browser itself receives is remembered too, so the next `scrape_urls`
+or `browser_navigate` call on that host is skipped. The navigate call that got
+the refusal still returns what the browser saw. `browser_act` is not gated: it
+works on a page that is already open.
+
 ## Settings
 
 | Key | Default | Meaning |
@@ -46,6 +70,7 @@ The final URL the fetcher reports goes through the same URL safety checks and
 | `scrape_fallback_fetcher_url` | `""` (off) | The service's `http` or `https` URL |
 | `scrape_fallback_fetcher_timeout_seconds` | `60` | How long the service may take; sent to it as `timeout_seconds` |
 | `scrape_fallback_min_words` | `30` | Visible-word threshold for a short page; `0` = only empty pages |
+| `scrape_refused_host_ttl_seconds` | `600` | How long a host that answered 403/429/503 is answered from memory by `scrape_urls` and `browser_navigate`; `0` = off |
 
 `scrape_fallback_fetcher_url` is operator-managed like the browser settings:
 set it in the config file or with `TINYSEARCH_SCRAPE_FALLBACK_FETCHER_URL`. It
