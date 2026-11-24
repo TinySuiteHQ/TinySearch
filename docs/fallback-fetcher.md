@@ -30,6 +30,7 @@ PDF and DOCX URLs never use it. Pages that read normally never use it.
 | --- | --- |
 | The fetcher returns a page with enough text | That page is used: its text, title, links and final URL |
 | The original answered 403, 429 or 503 and the fetcher fails, isn't configured, or returns another such page | The item fails with `fetch_unavailable` |
+| The final page answered any other HTTP status of 400 or above (404, 410, 500, ...), however much text it has | The item fails with `fetch_unavailable` |
 | The original answered 200 with little text and the fetcher fails or returns little text | The original page is used as before |
 
 `fetch_unavailable` applies whether or not a fallback fetcher is configured: an

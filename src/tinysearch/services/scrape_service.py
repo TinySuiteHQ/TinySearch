@@ -47,7 +47,7 @@ class EmptyContentError(ScrapeError):
 
 
 class FetchUnavailableError(ScrapeError):
-    """The page answered HTTP 403, 429, or 503 and no readable copy was fetched.
+    """The page answered an HTTP error status and no readable copy was fetched.
 
     Raised instead of returning the error page's text, which is never
     evidence about the requested page.
